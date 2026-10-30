@@ -1,0 +1,5 @@
+build/
+*.exe
+*.bak
+*.blob
+node_modules/
