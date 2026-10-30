@@ -10,7 +10,7 @@ What `1` does (each step has a backup):
 
 1. unlock / repair the profile directory (needs `repair-dsh-profile-lock.ps1` next to the exe)
 2. rewrite poisoned `turn/end reason:null` events in `~/.dsh/sessions`
-3. check `resourcesuntime` payload; restore it from the cached installer package when the update left it empty
+3. check `resources\runtime` payload; restore it from the cached installer package when the update left it empty
 4. explain the latest crash from `crash-*.log`
 
 CLI: `DSH-doctor.exe fix | doctor | logs --list | sessions --fix | runtime --restore | net | lock | version`.
@@ -118,8 +118,7 @@ CLI: `DSH-doctor.exe fix | doctor | logs --list | sessions --fix | runtime --res
 - 日志里 `错误码` 是从全文抓的，可能抓到与根因无关的 `ENOENT`；以「判读 + 结论」两行为准。
 - `sessions --fix` 只改 `"reason":null` → `{"kind":"aborted"}` 这一种，且留 `.dshfix.bak`；它修的是**历史数据**，不防新数据（防新数据靠内核 clamp + `dsh-member-manager` 0.4.1）。
 - `runtime` 的「更新窗口期」判据是「runtime 目录创建 ≤ 30 分钟且载荷不全」，本机实测铺完要 17 分钟；超过 30 分钟还缺才是真装坏。
-- `patch-skill-office.cjs` 改的是 `resourcespp\dsh
-ode_modules\@deepseek-ai\dsh-skill-office\lib\index.js`，**每次 DSH 升级都会被覆盖**，升级后重跑 `node patch-skill-office.cjs`（幂等，`--check` 看状态，`--revert` 还原）。
+- `patch-skill-office.cjs` 改的是 `resources\app\dsh\node_modules\@deepseek-ai\dsh-skill-office\lib\index.js`，**每次 DSH 升级都会被覆盖**，升级后重跑 `node patch-skill-office.cjs`（幂等，`--check` 看状态，`--revert` 还原）。
 - 共享库 `_ai/scripts/repair-dsh.ps1` 是另一件事（族 J′：更新后 runtime 空，重跑安装包），与本目录的 `repair-dsh-profile-lock.ps1`（族 I：ACL）互补。
 
 ## exe 是怎么打的（Node 22 才行）
