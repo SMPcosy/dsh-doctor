@@ -143,22 +143,20 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 | 位置 | 内容 |
 | --- | --- |
 | 仓库 | 源码 `dsh-diag.mjs`、`repair-dsh-profile-lock.ps1`、`README.md`、`.gitignore` |
-| Release `v0.5.0` 资产（已发布） | `DSH-doctor.exe`（85,776,384 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
-| `0.5.1` 测试版（已构建，未发布） | `DSH-doctor.exe`（85,776,896 B）—— 加「测试版」标识、菜单标题与文档改版 |
+| Release `v0.5.1` 资产（当前版本，测试版） | `DSH-doctor.exe`（85,776,896 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
 
-`SHA256(v0.5.0 DSH-doctor.exe) = 0bbf049be6d6f765339995b05a991736f115cf64329b8376d6fa98f7feeee2e7`
-`SHA256(0.5.1 DSH-doctor.exe) = eae4cfe7e07b1636dac6e03fbc4d626794aff74d6a874256df59d2734a36a0e2`
+`SHA256(DSH-doctor.exe) = eae4cfe7e07b1636dac6e03fbc4d626794aff74d6a874256df59d2734a36a0e2`
 
 自查：`certutil -hashfile DSH-doctor.exe SHA256`
 
-0.5.1 已构建但**没有上传**——发布这件事由维护者点头才算数，工具准备好了不等于发出去了。
+`v0.5.0` 已下线：`0.5.1` 是修打包链之后的重新构建，两者行为不同，留着旧资产会让人下到跑不起来的版本。旧 tag 一并删除（`gh release delete v0.5.0 --cleanup-tag`）。
 
 **怎么发的**
 
 1. exe 不进 git（`.gitignore` 挡 `*.exe`、`build/`、`*.bak`），走 Release 资产——单个 exe 80 MB 以上，提交进仓库会让每个 clone 都拖一遍。
 2. 先建私有仓库确认内容，再改可见性：`gh repo edit <name> --visibility public --accept-visibility-change-consequences`。
-3. 打标签并发版：`gh release create v0.5.0 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.5.0" --notes-file notes.md`。
-4. 发新版：改 `VERSION` → 重新打包（见下节）→ 新 tag → 上传新资产；**不覆盖**旧版本的资产。
+3. 打标签并发版：`gh release create v0.5.1 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.5.1 (beta)" --notes-file notes.md`。
+4. 发新版：改 `VERSION` → 重新打包（见下节）→ 新 tag → 上传新资产，旧 tag 保留；只有旧版**行为已经不对**（比如这次打包链有 bug）时才下线旧版，并在说明里写清原因。
 
 ## 开发过程
 
@@ -246,7 +244,7 @@ Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 
 **Release**
 
-Repository: source + PowerShell helper + this README. Release `v0.5.0` assets: `DSH-doctor.exe` (85,776,384 B, `SHA256 0bbf049be6d6f765339995b05a991736f115cf64329b8376d6fa98f7feeee2e7`) and `repair-dsh-profile-lock.ps1`. Version `0.5.1` (beta, built locally, not published) adds the beta label and rewritten docs; every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
+Repository: source + PowerShell helper + this README. Release `v0.5.1` (beta) assets: `DSH-doctor.exe` (85,776,896 B, `SHA256 eae4cfe7e07b1636dac6e03fbc4d626794aff74d6a874256df59d2734a36a0e2`) and `repair-dsh-profile-lock.ps1`. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
 
 **License**
 
