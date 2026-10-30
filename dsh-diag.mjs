@@ -38,7 +38,10 @@ const IS_SEA = !!process.argv[1] && process.argv[1] === process.execPath;
 const PROG = IS_SEA ? basename(process.execPath) : 'node dsh-diag.mjs';
 
 // 版本号：发版时只改这一处（help / version / 菜单标题都读它）
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
+// 通道：本工具依赖 DSH 内部实现（事件结构、资源布局），DSH 一升级就可能失准，
+// 所以 1.0 之前一律按测试版对外标，界面上要带出来。
+const CHANNEL = 'beta';
 
 // ───────────────────────────── 输出小工具 ─────────────────────────────
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -859,10 +862,14 @@ ${BAD} 拉起失败：${e.message}`); return 2; }
 }
 
 const HELP = `
-${bold('DSH Doctor')} ${VERSION} —— DSH 弹窗报错一站式诊断（原 5 个工具合成一个入口）
+${bold('DSH Doctor')} ${VERSION} · ${CHANNEL} —— DSH 弹窗报错一站式诊断（原 5 个工具合成一个入口）
 
 用法： ${PROG} <子命令> [参数]
       双击 ${PROG}（不带参数）= 进入菜单，按 1 就是一键检查并自动修复
+
+${yellow('测试版')}：它认的是 DSH 现在的内部结构（事件字段、resources 布局）。
+DSH 升级后这些可能变，某些判读会失准（工具只报告、不乱改）。出问题请开 Issue，
+附上 DSH 版本和 ${PROG} doctor --json 的输出。
 
   ${cyan('fix')}                   一键自检 + 自动修（有备份、可回滚）＝ 菜单里的 1
         --root <路径>          指定 DSH 安装目录
@@ -944,7 +951,7 @@ async function cmdAuto(argv) {
   const todo = [];
   let bad = 0;
 
-  if (!quiet) bigTitle(`DSH Doctor ${VERSION} · 一键自检`);
+  if (!quiet) bigTitle(`DSH Doctor ${VERSION} · ${CHANNEL} · 一键自检`);
   say(`第 1 步 / 4　个人配置与锁`);
   let pr = checkProfile();
   if (pr.writable === false || (pr.lock.exists && pr.lock.isDir)) {
@@ -1050,7 +1057,7 @@ async function cmdMenu() {
     console.clear?.();
     say('');
     say(cyan('  ────────────────────────────────────────────'));
-    say(cyan(`   DSH Doctor ${VERSION}`) + '    修 DSH 打不开 / 弹窗报错');
+    say(cyan(`   DSH Doctor ${VERSION} · ${CHANNEL}`) + '  修 DSH 打不开 / 弹窗报错');
     say(cyan('  ────────────────────────────────────────────'));
     say('');
     say('   1  一键检查并自动修复（推荐，先按这个）');
@@ -1116,7 +1123,7 @@ async function main() {
   // 双击（无参数、真控制台）直接进菜单 —— 小白只需要会按 1
   if (!rest0.length && process.stdin.isTTY) return await cmdMenu();
   switch (cmd) {
-    case 'version': case '--version': case '-V': say(`DSH Doctor ${VERSION}`); return 0;
+    case 'version': case '--version': case '-V': say(`DSH Doctor ${VERSION} (${CHANNEL})`); return 0;
     case 'fix': case 'auto': return await cmdAuto(rest);
     case 'menu': return await cmdMenu();
     case 'doctor': {
