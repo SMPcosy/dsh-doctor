@@ -1,0 +1,7 @@
+{
+  "main": "build/dsh-diag.cjs",
+  "output": "build/sea.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": false
+}

@@ -38,7 +38,7 @@ const IS_SEA = !!process.argv[1] && process.argv[1] === process.execPath;
 const PROG = IS_SEA ? basename(process.execPath) : 'node dsh-diag.mjs';
 
 // 版本号：发版时只改这一处（help / version / 菜单标题都读它）
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 // 通道：本工具依赖 DSH 内部实现（事件结构、资源布局），DSH 一升级就可能失准，
 // 所以 1.0 之前一律按测试版对外标，界面上要带出来。
 const CHANNEL = 'beta';
@@ -730,18 +730,26 @@ async function cmdDoctor(argv) {
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 const sessionsRoot = () => join(homedir(), '.dsh', 'sessions');
 
-function decodeFrames(buf) {
+function decodeFrames(buf, budget = 64 * 1024 * 1024) {
   const parts = [];
-  let off = 0, frames = 0, incomplete = 0;
+  let off = 0, frames = 0, incomplete = 0, chars = 0, truncated = false;
   while (off < buf.length) {
     const idx = buf.indexOf(ZSTD_MAGIC, off);
     if (idx < 0) break;
-    try { parts.push(zlib.zstdDecompressSync(buf.subarray(idx)).toString('utf8')); frames += 1; }
-    catch { incomplete += 1; break; }
+    // 一帧只解一帧：终点截在下一个 magic 之前，否则 zstd 会把后面所有帧一起解出来，
+    // 大文件上累计字符串会越过 V8 上限（RangeError: Invalid string length）。
     const next = buf.indexOf(ZSTD_MAGIC, idx + 4);
-    off = next < 0 ? buf.length : next;
+    const end = next < 0 ? buf.length : next;
+    let s;
+    try { s = zlib.zstdDecompressSync(buf.subarray(idx, end)).toString('utf8'); }
+    catch { incomplete += 1; break; }
+    if (chars + s.length > budget) { truncated = true; break; }
+    parts.push(s);
+    chars += s.length;
+    frames += 1;
+    off = end;
   }
-  return { text: parts.join(''), frames, incomplete };
+  return { text: parts.join(''), frames, incomplete, truncated };
 }
 
 function walkSessions(dir, out = []) {
@@ -1116,7 +1124,19 @@ async function cmdAuto(argv) {
   let bad = 0;
 
   if (!quiet) bigTitle(`DSH Doctor ${VERSION} · ${CHANNEL} · 一键自检`);
-  say(`第 1 步 / 4　个人配置与锁`);
+  say(`第 1 步 / 4　先读最近一次崩溃（只读，不改文件）`);
+  const logs = listLogs(logsDir());
+  const latest = logs.find((l) => /host\.log$/i.test(l.file)) || logs[0];
+  if (!latest) {
+    say(`  ${OK} 没有崩溃日志（说明没崩过，这是好事）`);
+  } else {
+    const a = analyzeLog(latest.file);
+    say(`  · 最近一份：${latest.file}`);
+    say(`  · ${a.family}`);
+    if (a.next) say(`    ${a.next}`);
+  }
+
+  say(`第 2 步 / 4　个人配置与锁`);
   let pr = checkProfile();
   if (pr.writable === false || (pr.lock.exists && pr.lock.isDir)) {
     const ps1 = findRepairScript();
@@ -1141,7 +1161,7 @@ async function cmdAuto(argv) {
     say(`  ${OK} 正常`);
   }
 
-  say(`第 2 步 / 4　会话数据（启动崩的最常见原因）`);
+  say(`第 3 步 / 4　会话数据（启动崩的最常见原因）`);
   if (typeof zlib.zstdDecompressSync !== 'function') {
     say(`  ${WARN} 这个 Node 没有 zstd 支持，跳过`);
   } else {
@@ -1155,7 +1175,7 @@ async function cmdAuto(argv) {
     }
   }
 
-  say(`第 3 步 / 4　安装文件是否齐全`);
+  say(`第 4 步 / 4　安装文件是否齐全`);
   let rt = checkRuntime(root);
   if (rt.state === 'empty') {
     say(`  · 发现安装目录里 runtime 整段是空的 → 尝试从更新包回填`);
@@ -1189,17 +1209,6 @@ async function cmdAuto(argv) {
     bad += 1;
   } else {
     say(`  ${OK} 齐全（${rt.items.filter((i) => i.ok).length}/${rt.items.length} 项）`);
-  }
-
-  say(`第 4 步 / 4　最近一次崩溃的原因`);
-  const logs = listLogs(logsDir());
-  const latest = logs.find((l) => /host\.log$/i.test(l.file)) || logs[0];
-  if (!latest) {
-    say(`  ${WARN} 没找到崩溃日志（说明没崩过，这是好事）`);
-  } else {
-    const a = analyzeLog(latest.file);
-    say(`  · ${a.family}`);
-    if (a.next) say(`    ${a.next}`);
   }
 
   say('');

@@ -1,5 +1,35 @@
 # DSH Doctor · DSH 弹窗报错诊断
 
+## 先说三件事
+
+### 一、为什么一运行就弹「未知程序」
+
+因为这个 exe 没有代码签名证书。Windows 判断一个从网上下载的程序可不可信，只看两样：**有没有可验证的发布者签名**、**这个文件在微软那边有没有信誉积累**。它两样都没有，所以每次都被拦：
+
+- **文件属性里「发布者」一栏是空的。** 签名要买证书（能过 SmartScreen 的 OV / EV 证书需要企业资质和年费），个人项目通常不签；没有签名，Windows 只能显示「未知发布者」，弹窗里也会把程序名缩成你在截图里看到的那个陌生名字。
+- **它带着「来自网络」的标记。** 从浏览器下载的 exe 会被写上一个 Zone.Identifier 标记；「有下载标记 + 无签名 + 无信誉」这三样凑齐，SmartScreen 第一次运行必然拦一道蓝底提示：「Windows 已保护你的电脑」。
+- **每发一版都是新文件。** 哈希一变，信誉从零开始，所以不是「这一次特别可疑」，而是每个版本都会再弹一次。
+
+这不是 DSH 的问题，也不能反过来证明它安全 —— 它就是一个没签名的普通程序。要确认手上这份是不是本仓库发的：比对 `SHA256`（见 [发布到 GitHub](#发布到-github)）。文件属性里「数字签名」空白是正常的；有你不认识的签名，才该警惕。
+
+放行方法：蓝底提示点**更多信息 → 仍要运行**；如果没有「仍要运行」，说明文件被标了「来自网络」，右键 → 属性 → 勾选「解除锁定」→ 确定。
+
+### 二、它是照着弹窗截图反推的方案，没有取得全部日志
+
+- 24 族的判读规则，来自共享库对 **60 张实拍弹窗截图** 的文字归纳，**不是**完整的日志语料；本项目**没有取得 DSH 全部的 `crash-*.log` 样本**，也没有官方背书。
+- 它认的是**文本指纹**：日志里出现某几句特征话，就归到某一族。措辞变了、只贴了半行，它会明说「未归类」，不硬猜一个族糊弄你。
+- 指纹相同不等于根因相同。族名是「最可能」，不是「已确诊」；要定死还得看日志全文。每族的指纹、成因、处理都能自己查：`DSH-doctor.exe families P`。
+
+### 三、运行后它先读日志，再动手
+
+菜单 `1` 的顺序是固定的，不会一上来就改文件：
+
+1. **先读**：取最近一份 `crash-*.log`（有 `host.log` 就优先它），判出族名并打印 —— 这一步只读，不动任何文件；
+2. **再修**：然后才走四步检查与修复 —— 配置目录与锁 → 会话里坏的 `turn/end` → `resources\runtime` 是否铺齐 → 汇总；
+3. **留退路**：每处改动先备份（`.bak` / `.dshfix.bak`），收尾时告诉你「我做了什么」「你还需要做什么」。
+
+没有崩溃日志时它照跑，但只做不依赖判读的那几项，不替你猜原因。
+
 DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双击这个 exe、按一下 `1`，它自己找出原因，并把能修的部分修好。
 
 [English](#english) ｜ [下载最新版](../../releases/latest) ｜ [报告问题](../../issues)
@@ -8,10 +38,11 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 - **给谁**：装过 DSH、遇到过弹窗、但不想读日志的人。
 - **不是什么**：不是 DSH 插件，不改变 DSH 的功能；DSH 能正常打开之后的问题它不管。
 
-> **0.6.0 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。0.6.0 起它认得 **24 族**弹窗（A–V，含 B′ / J′），族谱来自共享库对 60 张实拍弹窗的整理 —— 不联网也能查：`DSH-doctor.exe families`。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
+> **0.6.1 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。`0.6.0` 起它认得 **24 族**弹窗（A–V，含 B′ / J′），族谱来自共享库对 60 张实拍弹窗的整理 —— 不联网也能查：`DSH-doctor.exe families`。`0.6.1` 把「先判族」提到第一步（只读），并修掉大会话文件让体检报 `Invalid string length` 的问题。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
 
 ## 目录
 
+- [先说三件事](#先说三件事)
 - [它修什么](#它修什么)
 - [它认得哪些弹窗（24 族）](#它认得哪些弹窗24-族)
 - [下载与使用（手把手）](#下载与使用手把手)
@@ -69,14 +100,9 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 - 把 `repair-dsh-profile-lock.ps1` 也放进同一个文件夹（修配置目录权限要用它；没有也能跑，只是这一步会跳过）。
 - 不要放 `C:\Program Files\`，那里需要管理员权限。
 
-**第 4 步 · 双击运行**：Windows 会弹一个蓝色的「已保护你的电脑」——
+**第 4 步 · 双击运行**：Windows 会弹一个蓝色的「已保护你的电脑」—— 点**更多信息**，再点**仍要运行**。原因写在 [为什么一运行就弹「未知程序」](#一为什么一运行就弹未知程序) 里；想确认不是被替换过的文件，比对 `SHA256`（见 [发布到 GitHub](#发布到-github)）。
 
-1. 点**更多信息**
-2. 点**仍要运行**
-
-这是因为它没有买代码签名证书（个人项目常见），不是中毒。想自查可以比对 SHA256，见 [发布到 GitHub](#发布到-github)。
-
-**第 5 步 · 按 `1`**：出现菜单后按数字 `1`，回车。它会依次检查并修四样东西，全程不问你问题。
+**第 5 步 · 按 `1`**：出现菜单后按数字 `1`，回车。它先读最近一份崩溃日志、报出属于哪一族（只读），再依次检查并修四样东西，全程不问你问题。
 
 **第 6 步 · 等它跑完**：一般 10 秒内；如果它在回填安装文件，最多 3 分钟（会显示进度）。
 
@@ -96,7 +122,7 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 
 | 按键 | 做什么 |
 | --- | --- |
-| `1` | 一键检查并自动修复（推荐，先按这个） |
+| `1` | 一键检查并自动修复（推荐，先按这个）：先读最近日志判族，再动手修 |
 | `2` | 只检查，什么都不改 |
 | `3` | 修好后启动 DSH |
 | `4` | 打开日志文件夹（要自己看的时候用） |
@@ -147,7 +173,8 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 ## 边界与已知限制
 
 - **跨版本不保证**。判定规则是按 `0.2.1-rc.3` 到 `0.2.1-rc.5` 的真实日志写的；DSH 换大版本后可能出现「认不出」的情况——这时它会老老实实说「未归类」，不会硬猜。
-- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.6.0` 做的是把族谱从 14 族补到 24 族（新增 M / P / Q / R / S / T / U / V / K 与 B′ 的判读）、加 `families` 对照表，并把打包链与判族回归搬进仓库（`tools/mkcjs.mjs`、`verdict.test.mjs`）。
+- **判族依据不是完整日志语料**。24 族来自 60 张弹窗截图的文本归纳，本项目没有取得 DSH 全部 `crash-*.log` 样本；指纹未命中即报「未归类」，不硬套族名。
+- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.6.0` 做的是把族谱从 14 族补到 24 族（新增 M / P / Q / R / S / T / U / V / K 与 B′ 的判读）、加 `families` 对照表，并把打包链与判族回归搬进仓库（`tools/mkcjs.mjs`、`verdict.test.mjs`）；`0.6.1` 把崩溃判族提到动手之前，并修掉大会话文件导致的 `Invalid string length` 崩溃。
 - **只管启动阶段**。DSH 打开之后某个功能不好用、某个插件报错，不在范围内。
 - **仅 Windows x64**，Win10 1809 及以上。没有 macOS / Linux 版。
 - **未签名**，SmartScreen 必然提示。要消掉得自己买证书签。
@@ -167,10 +194,10 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 
 | 位置 | 内容 |
 | --- | --- |
-| 仓库 | 源码 `dsh-diag.mjs`、`repair-dsh-profile-lock.ps1`、`README.md`、`.gitignore` |
-| Release `v0.6.0` 资产（当前版本，测试版） | `DSH-doctor.exe`（85,791,232 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
+| 仓库 | 源码 `dsh-diag.mjs`、`repair-dsh-profile-lock.ps1`、`verdict.test.mjs`、`tools/`（`mkcjs.mjs`、`inject.cjs`、`sea-config.json`）、`README.md`、`.gitignore` |
+| Release `v0.6.1` 资产（当前版本，测试版） | `DSH-doctor.exe`（85,791,744 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
 
-`SHA256(DSH-doctor.exe) = 35d73247cbdc2d17674e3d5a803f6a564178117bf94387b165d0d1d31c14bb76`
+`SHA256(DSH-doctor.exe) = 2cb2925b5059909bbe21534f1ad90ae917ecc133fae905462d7bd959a85375d9`
 
 自查：`certutil -hashfile DSH-doctor.exe SHA256`
 
@@ -180,7 +207,7 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 
 1. exe 不进 git（`.gitignore` 挡 `*.exe`、`build/`、`*.bak`），走 Release 资产——单个 exe 80 MB 以上，提交进仓库会让每个 clone 都拖一遍。
 2. 先建私有仓库确认内容，再改可见性：`gh repo edit <name> --visibility public --accept-visibility-change-consequences`。
-3. 打标签并发版：`gh release create v0.6.0 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.6.0 (beta)" --notes-file notes.md`。
+3. 打标签并发版：`gh release create v0.6.1 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.6.1 (beta)" --notes-file notes.md`。
 4. 发新版：改 `VERSION` → 重新打包（见下节）→ 新 tag → 上传新资产，旧 tag 保留；只有旧版**行为已经不对**（比如这次打包链有 bug）时才下线旧版，并在说明里写清原因。
 
 ## 开发过程
@@ -197,18 +224,22 @@ K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是
 **打包四步**
 
 ```bash
+# 0) 壳：Node 22 便携版解压出的 node.exe 放到 build/node22/
+#    （https://nodejs.org/dist/v22.20.0/node-v22.20.0-win-x64.zip，只需里面的 node.exe）
+
 # 1) ESM → CJS（SEA 的 main 必须是 CommonJS：import 改 require、SELF_DIR 改 __dirname）
 node tools/mkcjs.mjs               # 生成 build/dsh-diag.cjs；残留 import/export 或 node --check 不过就退出码 1（产物删掉）
 
-# 2) 生成 SEA blob
-node.exe --experimental-sea-config build/sea-config-22.json
+# 2) 用 Node 22 生成 SEA blob（blob 必须由壳同版本 Node 生成）
+build/node22/node.exe --experimental-sea-config tools/sea-config.json   # → build/sea.blob
 
-# 3) 拷 Node 22 当壳并注入
-cp node22/node.exe build/new.exe
-node postject-pkg/package/dist/api.js   # inject(): build/new.exe + NODE_SEA_BLOB + sentinel fuse
+# 3) 拷 Node 22 当壳并注入（postject 不随仓库分发，用它的 API）
+cp build/node22/node.exe build/DSH-doctor.exe
+POSTJECT_API=<postject-pkg>/package/dist/api.js node tools/inject.cjs
 
 # 4) 冒烟
-./build/DSH-doctor.exe help && ./build/DSH-doctor.exe families | head && ./build/DSH-doctor.exe logs --list
+./build/DSH-doctor.exe version && ./build/DSH-doctor.exe help | head -3 \
+  && ./build/DSH-doctor.exe families | head -3 && ./build/DSH-doctor.exe logs --list | head -3
 ```
 
 **判族回归**
@@ -252,10 +283,16 @@ node --test verdict.test.mjs      # 每族至少一条真实指纹；族名必�
 
 Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 
+**Read this first**
+
+- **Why Windows calls it an unknown program.** The exe is unsigned: no publisher certificate, no SmartScreen reputation, and a brand-new hash every release. So the file properties show an empty publisher, and the first launch is blocked by "Windows protected your PC". Click **More info → Run anyway**; if that button is missing, clear the internet-download mark (right-click → Properties → Unblock). Compare the SHA256 listed under *Release* to confirm you have the real build.
+- **What this project is based on.** The 24 crash families are text-fingerprint rules inferred from 60 photographed crash popups — not from a complete `crash-*.log` corpus. No full log samples were obtained, and there is no official endorsement. When no fingerprint matches, the tool reports "unclassified" instead of guessing.
+- **After launch it reads first, then repairs.** Menu `1` reads the newest crash log and classifies it (read-only) before touching anything, then runs the four repair steps and keeps a `.bak` copy of every change.
+
 **Quick start**
 
 1. Download `DSH-doctor.exe` from [Releases](../../releases/latest). Put it in a normal folder (e.g. `D:\Tools\DSH-doctor\`), together with `repair-dsh-profile-lock.ps1` if you want the ACL repair step.
-2. Double-click it. SmartScreen says "Windows protected your PC" — click **More info → Run anyway** (the binary is unsigned).
+2. Double-click it. Windows says "Windows protected your PC" — click **More info → Run anyway** (unsigned binary; see *Read this first*).
 3. Press `1`. It runs four checks and repairs what it can, keeping a `*.bak` copy of everything it touches.
 4. Read the last three lines, then reopen DSH (menu `3` launches it for you).
 
@@ -277,7 +314,7 @@ Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 
 **Release**
 
-Repository: source + PowerShell helper + tests + build script + this README. Release `v0.6.0` (beta) assets: `DSH-doctor.exe` (85,791,232 B, `SHA256 35d73247cbdc2d17674e3d5a803f6a564178117bf94387b165d0d1d31c14bb76`) and `repair-dsh-profile-lock.ps1`. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
+Repository: source + PowerShell helper + tests + build script + this README. Release `v0.6.1` (beta) assets: `DSH-doctor.exe` (85,791,744 B, `SHA256 2cb2925b5059909bbe21534f1ad90ae917ecc133fae905462d7bd959a85375d9`) and `repair-dsh-profile-lock.ps1`. `0.6.1` classifies the newest crash before touching anything and fixes the `Invalid string length` crash on very large session files. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
 
 **License**
 
