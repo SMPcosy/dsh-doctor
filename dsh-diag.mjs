@@ -38,7 +38,7 @@ const IS_SEA = !!process.argv[1] && process.argv[1] === process.execPath;
 const PROG = IS_SEA ? basename(process.execPath) : 'node dsh-diag.mjs';
 
 // 版本号：发版时只改这一处（help / version / 菜单标题都读它）
-const VERSION = '0.6.1';
+const VERSION = '0.6.3';
 // 通道：本工具依赖 DSH 内部实现（事件结构、资源布局），DSH 一升级就可能失准，
 // 所以 1.0 之前一律按测试版对外标，界面上要带出来。
 const CHANNEL = 'beta';
@@ -69,15 +69,15 @@ function runCmd(file, args, timeout = 20000) {
   };
 }
 
-// ────────────────────── A. 崩溃日志判读（24 族） ──────────────────────
-// 族谱与指纹的唯一来源是共享库「DSH 报错弹窗」图库（60 张 / 24 族）。
+// ────────────────────── A. 崩溃日志判读（25 族） ──────────────────────
+// 族谱与指纹的唯一来源是共享库「DSH 报错弹窗」图库（60 张 / 25 族 + 本机 1 条实测 A′）。
 // FAMILIES 是给人看的对照表（families 子命令）；verdict() 是给日志用的判读器。
 // 两边名字必须一致 —— verdict 返回的族名要能在 FAMILIES 里找到（测试会查）。
 const CODES =
   /\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EHOSTDOWN|EPROTO|EPIPE|CERT_[A-Z_]+|ERR_TLS_[A-Z_]+|SELF_SIGNED_CERT[A-Z_]*|UNABLE_TO_VERIFY[A-Z_]*|UND_ERR_[A-Z_]+|EPERM|EACCES|ENOENT|EBUSY|EEXIST)\b/gu;
 
 /**
- * 24 族对照表（A–V，含 B′ / J′）。指纹取自共享库「DSH 报错弹窗」图库 60 张实拍。
+ * 25 族对照表（A–V，含 A′ / B′ / J′）。指纹取自共享库「DSH 报错弹窗」图库 60 张实拍。
  * 弹窗只显示 error 文本最后 8 行（最多 1200 字符）；日志后缀说明哪个进程死了，
  * 日志时间是 UTC；明细里的第一个词就是指纹 —— 这三个规则决定了判读方式。
  * K / L / U / V 不产生 DSH 崩溃日志（K 是子进程全挂、L 是双击无反应、
@@ -88,6 +88,10 @@ const FAMILIES = [
   { id: 'A', name: '启动期 JSON 解析崩溃', finger: 'Unexpected token … is not valid JSON（变体 null、"name"、","）',
     cause: 'profile 里的 package.json / 会话文件被写成半截或带尾逗号，启动时 JSON.parse 直接抛',
     fix: '用 node -e "JSON.parse(require(\'fs\').readFileSync(PATH,\'utf8\'))" 逐个验 profile 下的 json，补齐再启动' },
+  { id: "A′", name: '启动包 package.json 带 BOM（desktop 起不来）',
+    finger: 'Unexpected token 后面紧跟一个看不见的 U+FEFF（引号里看着是空的），同行有 is not valid JSON，栈在 …resources\\app\\lib\\main.js',
+    cause: 'resources\\app\\package.json 被写成 UTF-8 BOM（PowerShell 5.1 的 Set-Content -Encoding UTF8 会补 BOM），desktop 的 lib/main.js 用 JSON.parse 读它但不剥 BOM，启动期抛 SyntaxError，应用完全起不来',
+    fix: '去掉 BOM：node -e "const fs=require(\'fs\'),p=process.argv[1];fs.writeFileSync(p,fs.readFileSync(p,\'utf8\').replace(/^\\uFEFF/,\'\'),\'utf8\')" "C:\\…\\resources\\app\\package.json"；根治是读端剥 BOM（本机已给 desktop 的 manifest 解析打过补丁，升级后需重打）' },
   { id: 'B', name: '服务链未就绪', finger: 'workspaceController/sessionController is unavailable、Missing services、服务等待表',
     cause: '某个插件 activate() 抛错或被跳过，下游服务永远等到不到，host 收摊',
     fix: '日志往上找第一个报错的插件 → 先禁第三方插件，再逐条开回去' },
@@ -197,6 +201,13 @@ const uniq = (a) => [...new Set(a)];
 function verdict(message, all) {
   const t = `${message}\n${all}`;
   const hit = (re) => re.test(t);
+  // A 的 BOM 变体（2026-11-03 真实事故）：resources\app\package.json 被写成 UTF-8 BOM，
+  // desktop 的 lib/main.js 用 JSON.parse 读它却不剥 BOM → startup 期直接抛，应用没有任何界面。
+  // 指纹很窄：Unexpected token 后面紧跟一个看不见的 U+FEFF（编码丢失时会退化成 ï»¿）。
+  // 不能让它落进泛化的族 A —— 两者修的地方完全不同（A 改 profile 的 json，这里改应用包自己的 package.json）。
+  if (hit(/Unexpected token ['"](\uFEFF|ï»¿)/u))
+    return ["族 A′：启动包 package.json 带 BOM（desktop 起不来）",
+      '去掉 resources\\app\\package.json 开头的 BOM 再启动——这一步就能让 desktop 起来，别急着改别处'];
   if (hit(/is not valid JSON|Unexpected token/i))
     return ['族 A：启动期 JSON 解析崩溃', '校正 profile 的 package.json（用 node -e "JSON.parse(...)" 验一遍再启动）'];
   // rc.3 的 subagentTiming 投影直接读 turn/end 的 reason.kind；reason 落成 null 就炸在物化阶段，
@@ -363,7 +374,7 @@ function cmdLogs(argv) {
   return 0;
 }
 
-/** 打印 24 族对照表：没有日志可读时（或想先知道有哪几族）用它。 */
+/** 打印 25 族对照表：没有日志可读时（或想先知道有哪几族）用它。 */
 /** `families <id>` 的选择：带撇/′ 的只挑 B′ / J′，不带的就是 B / J 本身。 */
 function selectFamilies(argv) {
   const raw = argv.find((a) => !a.startsWith('--')) || '';
@@ -382,7 +393,7 @@ function cmdFamilies(argv) {
   }
   // --json 只输所选族（机器消费用），过滤逻辑与人类视图共用同一份 rows
   if (argv.includes('--json')) { say(JSON.stringify(rows, null, 2)); return 0; }
-  say(`DSH 弹窗族谱 ${FAMILIES.length} 族（A–V，含 B′ / J′）`);
+  say(`DSH 弹窗族谱 ${FAMILIES.length} 族（A–V，含 A′ / B′ / J′）`);
   say('来源：共享库「DSH 报错弹窗」图库 60 张实拍。判读日志用 logs，这里只是对照表。');
   for (const f of rows) {
     say('');
@@ -627,7 +638,7 @@ async function cmdDoctor(argv) {
   const asJson = argv.includes('--json');
   const full = argv.includes('--full');
   const pr = checkProfile();
-  const rtEarly = checkRuntime();
+  const rtEarly = checkRuntime(resolveInstallRoot(argv).root);
   const dir = logsDir();
   const logs = listLogs(dir);
   const latest = logs[0] ? analyzeLog(logs[0].file) : null;
@@ -992,9 +1003,7 @@ function cmdRuntimeRestore(argv, root) {
 }
 
 async function cmdRuntime(argv) {
-  const rootIdx = argv.indexOf('--root');
-  const rootArg = (argv.find((a) => a.startsWith('--root=')) || '').slice(7) || (rootIdx >= 0 ? argv[rootIdx + 1] || '' : '');
-  const root = rootArg ? (/^[a-zA-Z]:[\\/]|^\\\\|^\//.test(rootArg) ? rootArg : join(process.cwd(), rootArg)) : INSTALL_DEFAULT;
+  const { root } = resolveInstallRoot(argv);
   const waitIdx = argv.indexOf('--wait');
   const waitSec = Number((argv.find((a) => a.startsWith('--wait=')) || '').slice(7) || (waitIdx >= 0 ? argv[waitIdx + 1] : 0)) || 0;
   if (argv.includes('--restore')) return cmdRuntimeRestore(argv, root);
@@ -1028,6 +1037,318 @@ ${BAD} 拉起失败：${e.message}`); return 2; }
   return r.missing.length ? 1 : 0;
 }
 
+// ─────────── H2. 安装目录发现：DSH 装在别处也能用 ───────────
+// 默认位置（%LOCALAPPDATA%\Programs\DeepSeek Harness）只是最常见的一种。
+// 顺序：--root → DSH_INSTALL_DIR → 跑着的进程 → 注册表卸载项 → 默认位置。
+// 只读不猜；都找不到就回落到默认位置，并如实报出来源。
+function normalizeRootArg(p) {
+  if (!p) return '';
+  let s = String(p).trim().replace(/^"|"$/gu, '').replace(/,\s*0$/u, '');
+  if (!s) return '';
+  if (/\.exe$/iu.test(s)) s = dirname(s);
+  return s;
+}
+
+function looksLikeInstall(dir) {
+  if (!dir) return false;
+  try {
+    return existsSync(join(dir, 'DeepSeek Harness.exe'))
+      || existsSync(join(dir, 'resources', 'app', 'package.json'))
+      || existsSync(join(dir, 'resources', 'app.asar'));
+  } catch { return false; }
+}
+
+function captureCmd(cmd, args) {
+  const r = spawnSync(cmd, args, { encoding: 'buffer', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  if (!r || r.error || r.status !== 0) return '';
+  const buf = Buffer.isBuffer(r.stdout) ? r.stdout : Buffer.from(r.stdout || '');
+  try { return decode(buf).trim(); } catch { return buf.toString('utf8').trim(); }
+}
+
+function rootFromRunning() {
+  const out = captureCmd('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    "(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1 -ExpandProperty Path)"]);
+  for (const line of out.split(/\r?\n/u)) {
+    const p = normalizeRootArg(line);
+    if (p && looksLikeInstall(p)) return p;
+  }
+  return '';
+}
+
+function rootFromRegistry() {
+  const keys = [
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+    'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  ];
+  for (const key of keys) {
+    const out = captureCmd('reg', ['query', key, '/s', '/f', 'DeepSeek Harness', '/t', 'REG_SZ']);
+    for (const line of out.split(/\r?\n/u)) {
+      if (!/REG_SZ/u.test(line)) continue;
+      const m = line.match(/([A-Za-z]:\\[^|\r\n]*?DeepSeek Harness(?:\.exe)?)(?:,\s*0)?\s*$/u);
+      if (!m) continue;
+      const p = normalizeRootArg(m[1]);
+      if (looksLikeInstall(p)) return p;
+    }
+  }
+  return '';
+}
+
+function resolveInstallRoot(argv = []) {
+  const i = argv.indexOf('--root');
+  const raw = (argv.find((a) => a.startsWith('--root=')) || '').slice(7) || (i >= 0 ? argv[i + 1] || '' : '');
+  const arg = normalizeRootArg(raw);
+  if (arg) return { root: /^[a-zA-Z]:[\\/]|^\\\\|^\//u.test(arg) ? arg : join(process.cwd(), arg), via: '--root' };
+  const env = normalizeRootArg(process.env.DSH_INSTALL_DIR || '');
+  if (env) return { root: env, via: 'DSH_INSTALL_DIR' };
+  const live = rootFromRunning();
+  if (live) return { root: live, via: '运行中的进程' };
+  const reg = rootFromRegistry();
+  if (reg) return { root: reg, via: '注册表卸载项' };
+  return { root: INSTALL_DEFAULT, via: '默认位置' };
+}
+
+// ─────────── H3. 启动护栏：host 不 ready 时留证（2026-11-03 事故） ───────────
+// 现场：壳 spawn 出 host，host 卡在建 ctx / 装配插件那一段 await，永不发 {type:"ready"}。
+// 壳于是不开窗、不写日志、进程活着 —— 用户看到的就是「有进程没界面」。
+// host 的 stderr 只在内存 64KB 环里，且只有非零退出才落盘，事后无从判断卡在哪。
+// 护栏：stderr 实时写 logs\host-<pid>.log；60s 没 ready 再写 logs\no-ready-<pid>.log（含 stderr 尾部）。
+const GUARD_BEGIN = '/* [dsh-guard] host capture begin */';
+const GUARD_END = '/* [dsh-guard] host capture end */';
+const GUARD_ANCHOR = 'child.stdout?.pipe(process.stdout);';
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'); }
+
+function guardBody(indent) {
+  const L = [
+    'try {',
+    '  const gfs = process.getBuiltinModule("node:fs");',
+    '  const gos = process.getBuiltinModule("node:os");',
+    '  const gpath = process.getBuiltinModule("node:path");',
+    '  const gbase = process.env.APPDATA || gpath.join(gos.homedir(), "AppData", "Roaming");',
+    '  const gdir = gpath.join(gbase, "@deepseek-ai", "dsh-desktop", "logs");',
+    '  gfs.mkdirSync(gdir, { recursive: true });',
+    '  const gpid = String(child.pid);',
+    '  const glog = gpath.join(gdir, "host-" + gpid + ".log");',
+    '  const gwrite = (s) => { try { gfs.appendFileSync(glog, s); } catch (e) {} };',
+    '  const gstart = Date.now();',
+    '  gwrite("# dsh-guard " + new Date().toISOString() + " pid=" + gpid + "\\n");',
+    '  child.stderr?.on("data", (chunk) => gwrite(String(chunk)));',
+    '  const gresolve = this.readyResolve;',
+    '  this.readyResolve = (v) => { try { gwrite("\\n# ready " + (Date.now() - gstart) + "ms url=" + String(v && v.url) + "\\n"); } catch (e) {} return gresolve(v); };',
+    '  const gwatch = setInterval(() => {',
+    '    if (this.child !== child) { clearInterval(gwatch); return; }',
+    '    if (Date.now() - gstart < 60000) return;',
+    '    clearInterval(gwatch);',
+    '    try {',
+    '      gfs.writeFileSync(gpath.join(gdir, "no-ready-" + gpid + ".log"), [',
+    '        "# dsh-guard: host 起来 60s 仍没发 ready —— 壳一直不开窗（进程活着、零日志）",',
+    '        "time: " + new Date().toISOString(),',
+    '        "pid: " + gpid,',
+    '        "project: " + String(this.projectDir || ""),',
+    '        "node: " + String(this.node || ""),',
+    '        "child.exitCode: " + String(child.exitCode),',
+    '        "stderr tail:",',
+    '        this.stderr || "(empty)",',
+    '      ].join("\\n"));',
+    '    } catch (e) {}',
+    '  }, 2000);',
+    '} catch (e) { try { console.error("[dsh-guard] " + ((e && e.message) || e)); } catch (e2) {} }',
+  ];
+  return [GUARD_BEGIN, ...L, GUARD_END].map((s) => indent + s).join('\n');
+}
+
+function applyGuardPatch(src) {
+  if (src.includes(GUARD_BEGIN)) return { ok: true, changed: false, src };
+  const at = src.indexOf(GUARD_ANCHOR);
+  if (at < 0) return { ok: false, changed: false, reason: 'anchor-missing' };
+  const lineStart = src.lastIndexOf('\n', at) + 1;
+  const indent = (src.slice(lineStart, at).match(/^[ \t]*/u) || ['\t\t'])[0];
+  const lineEnd = src.indexOf('\n', at);
+  const insertAt = lineEnd < 0 ? src.length : lineEnd + 1;
+  return { ok: true, changed: true, src: src.slice(0, insertAt) + guardBody(indent) + '\n' + src.slice(insertAt) };
+}
+
+function revertGuardPatch(src) {
+  if (!src.includes(GUARD_BEGIN)) return { ok: true, changed: false, src };
+  const re = new RegExp('^[ \\t]*' + escapeRe(GUARD_BEGIN) + '[\\s\\S]*?' + escapeRe(GUARD_END) + '[ \\t]*\\r?\\n', 'mu');
+  if (!re.test(src)) return { ok: false, changed: false, reason: 'marker-pair-broken' };
+  return { ok: true, changed: true, src: src.replace(re, '') };
+}
+
+function guardFiles() {
+  const dir = logsDir();
+  try {
+    return readdirSync(dir)
+      .filter((f) => /^(?:no-ready|host)-\d+\.log$/u.test(f))
+      .map((f) => ({ name: f, path: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs, size: statSync(join(dir, f)).size }))
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { return []; }
+}
+
+function cmdGuard(argv) {
+  const { root, via } = resolveInstallRoot(argv);
+  const file = join(root, 'resources', 'app', 'lib', 'main.js');
+  const asJson = argv.includes('--json');
+  if (!existsSync(file)) {
+    if (asJson) say(JSON.stringify({ root, via, file, state: 'no-main-js', installed: false }));
+    else {
+      say(`${BAD} 找不到 ${file}`);
+      say(`  · 当前安装目录：${root}（来自 ${via}）${via === '默认位置' ? '；装在别处就用 --root 指定，或设 DSH_INSTALL_DIR' : ''}`);
+      if (existsSync(join(root, 'resources', 'app.asar'))) say(`  · 只有 resources\\app.asar（打包态）：护栏要改的是解包后的 lib\\main.js，先用 dsh-purge 解包再来`);
+    }
+    return 2;
+  }
+  const src = readFileSync(file, 'utf8');
+  const installed = src.includes(GUARD_BEGIN);
+  const wantApply = argv.includes('--apply') || argv.includes('--install');
+  const wantRevert = argv.includes('--revert') || argv.includes('--unpatch');
+  if (!wantApply && !wantRevert) {
+    if (asJson) say(JSON.stringify({ root, via, file, installed, guardFiles: guardFiles().map((g) => g.name) }));
+    else {
+      say(`${bold('DSH 启动护栏')}`);
+      say(`  安装目录：${root}（来自 ${via}）`);
+      say(`  main.js ：${file}`);
+      say(`  护栏状态：${installed ? `${OK} 已在位` : `${WARN} 没装`}`);
+      const gf = guardFiles();
+      if (gf.length) {
+        say(`  留证文件：${gf.length} 份（最新 ${basename(gf[0].path)}，${(gf[0].size / 1024).toFixed(1)} KB）`);
+        for (const g of gf.slice(0, 5)) say(`    · ${g.name}  ${new Date(g.mtime).toLocaleString()}`);
+      } else say('  留证文件：暂无（没装护栏时不会有）');
+      if (!installed) say(`\n装上：${PROG} guard --apply　　撤掉：${PROG} guard --revert`);
+    }
+    return installed ? 0 : 1;
+  }
+  if (wantApply && installed) { say(`${OK} 护栏已经在位，无需重复打`); return 0; }
+  if (wantRevert && !installed) { say(`${OK} 没有护栏，无需撤销`); return 0; }
+  const res = wantApply ? applyGuardPatch(src) : revertGuardPatch(src);
+  if (!res.ok) {
+    say(`${BAD} 改动失败：${res.reason}`);
+    say('  · anchor-missing = 这版 DSH 的 main.js 结构变了（升级过？），护栏得跟着改；先跑 doctor 报版本');
+    return 1;
+  }
+  if (!res.changed) { say(`${OK} 无需改动`); return 0; }
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const bak = `${file}.bak-dshguard-${ts}`;
+  writeFileSync(bak, src);
+  writeFileSync(file, res.src);
+  if (wantApply && !IS_SEA) {
+    const tmp = join(tmpdir(), `dsh-guard-check-${process.pid}.mjs`);
+    try {
+      writeFileSync(tmp, res.src);
+      const chk = spawnSync(process.execPath, ['--check', tmp], { encoding: 'utf8', windowsHide: true });
+      if (chk.status !== 0) {
+        writeFileSync(file, src);
+        say(`${BAD} 打完后语法自检没过，已自动还原：\n${(chk.stderr || '').trim()}`);
+        return 1;
+      }
+    } catch { /* 自检失败不阻断，已写备份 */ } finally { try { unlinkSync(tmp); } catch { /* ignore */ } }
+  }
+  say(`${OK} ${wantApply ? '护栏已装上' : '护栏已撤销'}：${file}`);
+  say(`  备份：${basename(bak)}`);
+  if (wantApply) {
+    say('  效果：host 的 stderr 实时落到 logs\\host-<pid>.log；60s 没 ready 再写 logs\\no-ready-<pid>.log');
+    say('  生效：重启 DSH 一次（护栏在主进程启动时生效）');
+  }
+  return 0;
+}
+
+// ─────────── H4. 启动体检：有进程、没窗口（族 W） ───────────
+function dshProcessRows() {
+  const out = captureCmd('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    "Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | ForEach-Object { \"{0}|{1}|{2}\" -f $_.Id, $_.MainWindowHandle, $_.StartTime.ToString('HH:mm:ss') }"]);
+  return out.split(/\r?\n/u).filter(Boolean).map((line) => {
+    const [pid, hwnd, started] = line.split('|');
+    return { pid: Number(pid) || 0, hwnd: Number(hwnd) || 0, started: (started || '').trim() };
+  }).filter((r) => r.pid);
+}
+
+function parentProcessName() {
+  const out = captureCmd('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    `(Get-CimInstance Win32_Process -Filter "ProcessId=${process.ppid}" -ErrorAction SilentlyContinue).Name`]);
+  return (out.split(/\r?\n/u)[0] || '').trim();
+}
+
+async function cmdHost(argv) {
+  const { root, via } = resolveInstallRoot(argv);
+  const asJson = argv.includes('--json');
+  const repair = argv.includes('--repair') || argv.includes('--restart-app');
+  const force = argv.includes('--yes');
+  const waitIdx = argv.indexOf('--wait');
+  const waitSec = Number((argv.find((a) => a.startsWith('--wait=')) || '').slice(7) || (waitIdx >= 0 ? argv[waitIdx + 1] : 0)) || 60;
+
+  const rows = dshProcessRows();
+  const withWindow = rows.filter((r) => r.hwnd > 0);
+  const guardOn = (() => { try { return readFileSync(join(root, 'resources', 'app', 'lib', 'main.js'), 'utf8').includes(GUARD_BEGIN); } catch { return false; } })();
+  const evidence = guardFiles();
+  const noReady = evidence.filter((g) => g.name.startsWith('no-ready-'));
+
+  const verdictText = !rows.length
+    ? '没有 DSH 进程 —— 应用根本没跑（不是族 W；按「起不来」查，看 doctor）'
+    : withWindow.length
+      ? '有进程、有窗口 —— 壳拿到了 ready，正常'
+      : '有进程、没有任何窗口 —— 壳在等 host 的 ready，host 卡住了（族 W）';
+
+  if (asJson) {
+    say(JSON.stringify({ root, via, guardOn, verdict: verdictText, processes: rows, evidence: evidence.map((e) => ({ name: e.name, size: e.size, mtime: new Date(e.mtime).toISOString() })) }, null, 2));
+    return rows.length && !withWindow.length ? 1 : 0;
+  }
+
+  say(`${bold('DSH 启动体检')}（族 W：壳等不到 host ready）`);
+  say(`  安装目录：${root}${via === '默认位置' ? '' : `（来自 ${via}）`}`);
+  say(`  护栏：${guardOn ? `${OK} 已在位` : `${WARN} 没装（装：${PROG} guard --apply）`}`);
+  if (!rows.length) say(`  进程：${BAD} 一个都没有`);
+  else {
+    say(`  进程：${rows.length} 个`);
+    for (const r of rows.slice(0, 12)) say(`    pid ${String(r.pid).padEnd(7)} 窗口 ${r.hwnd ? `0x${r.hwnd.toString(16)}` : '—'.padEnd(4)}  ${r.started}`);
+  }
+  say(`\n  ${rows.length && !withWindow.length ? BAD : OK} ${verdictText}`);
+  if (evidence.length) {
+    say(`  留证：${evidence.length} 份`);
+    for (const e of evidence.slice(0, 6)) say(`    · ${e.name}  ${(e.size / 1024).toFixed(1)} KB  ${new Date(e.mtime).toLocaleString()}`);
+    if (noReady.length) say(`  ${WARN} 其中 ${noReady.length} 份是 no-ready：host 卡在建 ctx / 装插件那段，卡点看文件里的 stderr 尾部`);
+  } else if (rows.length && !withWindow.length && !guardOn) {
+    say(`  ${INFO} 没有留证文件：护栏没装，host 卡在哪已无从判断（stderr 只在内存里）`);
+  }
+  if (rows.length && !withWindow.length) {
+    say('\n  处置：');
+    if (!repair) say(`    ${PROG} host --repair${force ? '' : ''}　（结束全部 DSH 进程后重新拉起，不含 --yes 时若本工具跑在 DSH 里会拒绝）`);
+    else {
+      const parent = parentProcessName();
+      const inside = /deepseek harness/iu.test(parent);
+      if (inside && !force) {
+        say(`  ${BAD} 本工具正跑在 DSH 里（父进程 ${parent}），--repair 会把自己一起杀掉；确认要杀就加 --yes`);
+        return 1;
+      }
+      spawnSync('taskkill', ['/IM', 'DeepSeek Harness.exe', '/F', '/T'], { windowsHide: true, encoding: 'utf8' });
+      const gone = Date.now() + 15000;
+      while (Date.now() < gone && dshProcessRows().length) await new Promise((r) => setTimeout(r, 500));
+      const left = dshProcessRows();
+      if (left.length) { say(`  ${BAD} 还有 ${left.length} 个进程没退出（pid ${left.map((p) => p.pid).join(',')}）`); return 1; }
+      const exe = join(root, 'DeepSeek Harness.exe');
+      if (!existsSync(exe)) { say(`  ${BAD} 找不到 ${exe}（用 --root 指到安装目录）`); return 2; }
+      const env = { ...process.env };
+      for (const k of ['ELECTRON_RUN_AS_NODE', 'ELECTRON_RUN_AS_DEVTOOLS', 'ELECTRON_NO_ATTACH_CONSOLE']) delete env[k];
+      try {
+        const child = spawn(exe, [], { cwd: root, detached: true, stdio: 'ignore', env });
+        child.unref();
+        say(`  ${INFO} 已拉起 ${basename(exe)}（pid ${child.pid ?? '?'}），等窗口…`);
+      } catch (e) { say(`  ${BAD} 拉起失败：${e.message}`); return 2; }
+      const deadline = Date.now() + waitSec * 1000;
+      let ok = false;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (dshProcessRows().some((r) => r.hwnd > 0)) { ok = true; break; }
+      }
+      say(ok ? `  ${OK} 窗口起来了` : `  ${BAD} ${waitSec}s 内没等到窗口 —— 还是族 W；装护栏重启一次，看 logs\\no-ready-*.log 里的 stderr 尾部`);
+      return ok ? 0 : 1;
+    }
+  }
+  return rows.length && !withWindow.length ? 1 : 0;
+}
+
 const HELP = `
 ${bold('DSH Doctor')} ${VERSION} · ${CHANNEL} —— DSH 弹窗报错一站式诊断（原 5 个工具合成一个入口）
 
@@ -1055,7 +1376,7 @@ DSH 升级后这些可能变，某些判读会失准（工具只报告、不乱�
         --all                  解析最新一份 + 附全部概览
         <路径>                 解析指定 log
 
-  ${cyan('families')}              24 族对照表（指纹 / 原因 / 处理），可只看一族
+  ${cyan('families')}              25 族对照表（指纹 / 原因 / 处理），可只看一族
         families P             只看族 P
         families B'            只看 B′（引号可省）
         --json                 机器可读
@@ -1082,6 +1403,18 @@ DSH 升级后这些可能变，某些判读会失准（工具只报告、不乱�
   ${cyan('fix-lock')}              调 PowerShell 修 profile ACL（族 I / EPERM）
         --apply                真修（默认只演练 -DryRun）
         --kill                 先结束 DSH 进程
+
+  ${cyan('host')}                  启动体检：有进程、没窗口（族 W：壳等不到 host 的 ready）
+        --repair               结束全部 DSH 进程后重新拉起（跑在 DSH 里时需再加 --yes）
+        --wait <秒>            --repair 后等窗口出现，默认 60
+        --root <路径>          指定安装目录（默认自动发现）
+        --json                 机器可读
+
+  ${cyan('guard')}                 装/撤启动护栏：host 的 stderr 落盘 + 60s 没 ready 写留证文件
+        --apply                装上（自动备份 main.js，装完语法自检，不过就还原）
+        --revert               撤掉
+        --root <路径>          指定安装目录（默认自动发现）
+        --json                 机器可读
 
   ${cyan('help')}                  这段帮助
 
@@ -1114,10 +1447,7 @@ function bigTitle(text) {
 
 /** 一键自检 + 自动修：只做有备份、可回滚的动作。 */
 async function cmdAuto(argv) {
-  const root = (() => {
-    const i = argv.indexOf('--root');
-    return i >= 0 && argv[i + 1] ? argv[i + 1] : INSTALL_DEFAULT;
-  })();
+  const root = resolveInstallRoot(argv).root;
   const quiet = argv.includes('--quiet');
   const done = [];
   const todo = [];
@@ -1317,6 +1647,8 @@ async function main() {
     case 'sessions': case 'poison': return cmdSessions(rest);
     case 'runtime': case 'install': return await cmdRuntime(rest);
     case 'fix-lock': return cmdFixLock(rest);
+    case 'host': case 'boot': return await cmdHost(rest);
+    case 'guard': case 'patch-host': return cmdGuard(rest);
     case 'help': case '-h': case '--help': say(HELP); return 0;
     default:
       say(`${BAD} 未知子命令：${cmd}`); say(HELP); return 2;
@@ -1326,7 +1658,7 @@ async function main() {
 // 测试要引用 verdict / FAMILIES，所以只在「自己被执行」时才跑主流程：
 // SEA（argv[1] === execPath）或 node dsh-diag.mjs（文件名对得上）。
 const IS_ENTRY = IS_SEA || /dsh-diag\.(c|m)?js$/iu.test(process.argv[1] || '');
-export { verdict, FAMILIES, cmdFamilies, selectFamilies, analyzeLog };
+export { verdict, FAMILIES, cmdFamilies, selectFamilies, analyzeLog, applyGuardPatch, revertGuardPatch, resolveInstallRoot, looksLikeInstall };
 if (IS_ENTRY) {
   main().then((code) => process.exit(code ?? 0)).catch((e) => { say(`${BAD} ${e.stack || e.message}`); process.exit(2); });
 }

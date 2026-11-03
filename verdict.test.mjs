@@ -17,6 +17,7 @@ const label = (msg, all = '') => verdict(msg, all)[0];
 const CASES = [
   ['族 A：启动期 JSON 解析崩溃', `Unexpected token ',', "..." is not valid JSON`],
   ['族 A：启动期 JSON 解析崩溃', `Unexpected token 'n', "name" is not valid JSON`],
+  ["族 A′：启动包 package.json 带 BOM（desktop 起不来）", "SyntaxError: Unexpected token '\uFEFF', \"\uFEFF{ \"nam\"... is not valid JSON", "    at main (file:///C:/…/resources/app/lib/main.js:12386:24)"],
   ['族 B：服务链未就绪', 'Error: workspaceController is unavailable'],
   ['族 B：服务链未就绪', 'Error: sessionController is unavailable (service-unavailable)'],
   ['族 B：服务链未就绪', 'plugin dsh-x is unavailable: did not activate'],
@@ -52,9 +53,9 @@ const CASES = [
   ['族 V：SmartScreen 拦下载（非 DSH 故障）', 'Windows SmartScreen：无法验证发布者'],
 ];
 
-test('24 族对照表：数量、id 唯一', () => {
-  assert.equal(FAMILIES.length, 24);
-  assert.equal(new Set(FAMILIES.map((f) => f.id)).size, 24);
+test('25 族对照表：数量、id 唯一', () => {
+  assert.equal(FAMILIES.length, 25);
+  assert.equal(new Set(FAMILIES.map((f) => f.id)).size, 25);
   for (const f of FAMILIES) {
     for (const k of ['id', 'name', 'finger', 'cause', 'fix']) assert.ok(f[k], `族 ${f.id} 缺 ${k}`);
     // 路径里漏写一个反斜杠 → \r 变真换行、\@ 丢反斜杠；这类文案用户照抄会失败，直接测死。
