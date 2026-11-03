@@ -8,11 +8,12 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 - **给谁**：装过 DSH、遇到过弹窗、但不想读日志的人。
 - **不是什么**：不是 DSH 插件，不改变 DSH 的功能；DSH 能正常打开之后的问题它不管。
 
-> **0.5.1 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
+> **0.6.0 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。0.6.0 起它认得 **24 族**弹窗（A–V，含 B′ / J′），族谱来自共享库对 60 张实拍弹窗的整理 —— 不联网也能查：`DSH-doctor.exe families`。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
 
 ## 目录
 
 - [它修什么](#它修什么)
+- [它认得哪些弹窗（24 族）](#它认得哪些弹窗24-族)
 - [下载与使用（手把手）](#下载与使用手把手)
 - [菜单](#菜单)
 - [命令行（可选）](#命令行可选)
@@ -31,10 +32,29 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 | 弹窗一闪就没了 / 一直转圈起不来 | 配置目录被锁或不可写（`EPERM`） | 调 `repair-dsh-profile-lock.ps1 -Apply` 修权限 |
 | 弹窗里有一堆栈，含 `reading 'kind'` | 会话日志里有旧的 `turn/end` 缺 `reason`，新版读它就崩 | 就地改写成合法值，原件留 `*.dshfix.bak` |
 | 弹窗含 `ENOENT … office-skills … SKILL.md` | 更新后 `resources` 里的运行时文件整段没铺 | 从本机更新器缓存的安装包里只回填这一段（实测 17 秒 / 6150 文件） |
-| 说不清是什么 | —— | 读最新一份崩溃日志，直接告诉你属于哪一类、下一步做什么 |
+| 弹窗里有 `working-directory: directory does not exist` | 会话记着的工作目录被删 / 改名 / 换盘 | 指出是哪一族，并给出找回目录或切目录的做法 |
+| 说不清是什么 | —— | 读最新一份崩溃日志，直接告诉你属于哪一类（24 族）、下一步做什么 |
 | 只是 `ERR_CONNECTION_REFUSED` | 启动竞态，等两秒就好 | 明确告诉你这是无害的，不让你白折腾 |
 
 每修一处都留备份，改完可以人工回退。
+
+## 它认得哪些弹窗（24 族）
+
+族谱来自共享库「DSH 报错弹窗」对 60 张实拍弹窗的整理。判读靠**文本指纹**，不是猜；`logs` 直接报族名，`families` 查全表（含指纹 / 原因 / 处理）。
+
+| 族 | 一句话 | 族 | 一句话 | 族 | 一句话 |
+| --- | --- | --- | --- | --- | --- |
+| A | 启动期 JSON 解析崩溃 | I | profile 目录权限被拒 | Q | 工具 schema 非法（`type: null`） |
+| B | 服务链未就绪（`… is unavailable`） | J | 网络层致命错误（裸 `fetch failed`） | R | provider 路由没有凭证 |
+| B′ | 服务等待表停在 UI 服务 | J′ | 安装包不完整（运行时资源没就位） | S | 代理预设注册表损坏 |
+| C | 欢迎窗 RPC 失败 | K | 子进程全挂 `0xC0000142`（无弹窗） | T | 设置无法保存（数据目录不可写） |
+| D | 渲染进程崩溃 | L | 双击无反应（旧实例占着单实例锁） | U | 开放平台已更新，需刷新页面 |
+| E | 鉴权失败（401） | M | 欢迎窗鉴权失败（cookie 超 16KB → 431） | V | SmartScreen 拦下载（非 DSH 故障） |
+| F | 模型传输失败（含 404） | N | 会话日志被 `turn/end reason=null` 毒化 | | |
+| G | 提示词变量非法（`{{cwd}}`） | O | 更新窗口期 `resources\untime` 未铺完 | | |
+| H | 代理预设缺失 | P | 会话工作目录不存在 | | |
+
+K / L / U / V 本来就不产生 DSH 崩溃日志（K 是子进程全挂、L 是双击没反应、U 是服务端版本门、V 是系统拦下载），**别指望在日志里看到它们** —— 这几族靠你描述的症状对表。
 
 ## 下载与使用（手把手）
 
@@ -91,7 +111,8 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 | --- | --- | --- |
 | `fix` | 等同菜单 `1`：锁 / 会话 / 安装文件 / 最近崩溃，只做有备份的动作 | `--root`、`--quiet` |
 | `doctor`（默认） | 五段体检：配置与锁、最新崩溃、网络、会话数据、安装文件 | `--json`、`--full` |
-| `logs` | 读 `crash-*.log` 并判类 | `--list`、`--all`、`<路径>` |
+| `logs` | 读 `crash-*.log` 并判族（24 族） | `--list`、`--all`、`<路径>` |
+| `families` | 24 族对照表：指纹 / 原因 / 处理，可只看一族 | `families P`、`families "B'"`、`--json` |
 | `sessions` | 扫会话里会让 DSH 崩的 `turn/end` 缺 `reason` | `--fix`、`--json` |
 | `runtime` | 查 `resources\runtime` 载荷是否齐全 | `--wait <秒>`、`--launch`、`--restore`、`--root` |
 | `net` | 把 `fetch failed` 拆成代理 / DNS / TCP / TLS / HTTP 四层 | `[url]`、`--json` |
@@ -126,10 +147,14 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 ## 边界与已知限制
 
 - **跨版本不保证**。判定规则是按 `0.2.1-rc.3` 到 `0.2.1-rc.5` 的真实日志写的；DSH 换大版本后可能出现「认不出」的情况——这时它会老老实实说「未归类」，不会硬猜。
-- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.5.1` 做的是把「测试版」写进界面和文档，并补齐菜单与说明，不是功能大改。
+- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.6.0` 做的是把族谱从 14 族补到 24 族（新增 M / P / Q / R / S / T / U / V / K 与 B′ 的判读）、加 `families` 对照表，并把打包链与判族回归搬进仓库（`tools/mkcjs.mjs`、`verdict.test.mjs`）。
 - **只管启动阶段**。DSH 打开之后某个功能不好用、某个插件报错，不在范围内。
 - **仅 Windows x64**，Win10 1809 及以上。没有 macOS / Linux 版。
 - **未签名**，SmartScreen 必然提示。要消掉得自己买证书签。
+- **族 L（双击无反应）没有判读规则**：它不写崩溃日志，`logs` 判不出来，只能 `families L` 对照症状人工认。
+- **`权限/占用类` 不算独立的族**：`EACCES` / `EBUSY` 是兜底结论，不在 24 族表里；它不指向单一根因，只说「先关占用进程 / 修权限」。
+- **族 N 只认那一句**：日志里出现 `Cannot read properties of null (reading 'kind')` 就判 N，不再要求栈里有 `dsh-session-projection` —— 用户常常只贴一行。
+- **`Failed to fetch` 归到族 J（网络层）**：它能是网络，也能是设置保存失败；带「设置 / 保存」上下文时先判 T，其余按网络走 `net` 分层。
 - `sessions --fix` 修的是**历史数据**，不阻止新数据产生（防新数据要靠 DSH 内核侧的空值保护）。
 - `runtime --restore` 需要本机还留着更新器缓存的安装包；找不到会打印三条手动命令，不会瞎改。
 - `fix-lock` 改的是 ACL，默认只演练，加 `--apply` 才真改；需要 PowerShell 5.1+。
@@ -143,19 +168,19 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 | 位置 | 内容 |
 | --- | --- |
 | 仓库 | 源码 `dsh-diag.mjs`、`repair-dsh-profile-lock.ps1`、`README.md`、`.gitignore` |
-| Release `v0.5.1` 资产（当前版本，测试版） | `DSH-doctor.exe`（85,776,896 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
+| Release `v0.6.0` 资产（当前版本，测试版） | `DSH-doctor.exe`（85,791,232 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
 
-`SHA256(DSH-doctor.exe) = eae4cfe7e07b1636dac6e03fbc4d626794aff74d6a874256df59d2734a36a0e2`
+`SHA256(DSH-doctor.exe) = 35d73247cbdc2d17674e3d5a803f6a564178117bf94387b165d0d1d31c14bb76`
 
 自查：`certutil -hashfile DSH-doctor.exe SHA256`
 
-`v0.5.0` 已下线：`0.5.1` 是修打包链之后的重新构建，两者行为不同，留着旧资产会让人下到跑不起来的版本。旧 tag 一并删除（`gh release delete v0.5.0 --cleanup-tag`）。
+`v0.5.0` 已下线：`0.5.1` 是修打包链之后的重新构建，两者行为不同，留着旧资产会让人下到跑不起来的版本。旧 tag 一并删除（`gh release delete v0.5.0 --cleanup-tag`）。`v0.5.1` 保留 —— 它能跑，只是族谱少一半。
 
 **怎么发的**
 
 1. exe 不进 git（`.gitignore` 挡 `*.exe`、`build/`、`*.bak`），走 Release 资产——单个 exe 80 MB 以上，提交进仓库会让每个 clone 都拖一遍。
 2. 先建私有仓库确认内容，再改可见性：`gh repo edit <name> --visibility public --accept-visibility-change-consequences`。
-3. 打标签并发版：`gh release create v0.5.1 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.5.1 (beta)" --notes-file notes.md`。
+3. 打标签并发版：`gh release create v0.6.0 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.6.0 (beta)" --notes-file notes.md`。
 4. 发新版：改 `VERSION` → 重新打包（见下节）→ 新 tag → 上传新资产，旧 tag 保留；只有旧版**行为已经不对**（比如这次打包链有 bug）时才下线旧版，并在说明里写清原因。
 
 ## 开发过程
@@ -173,7 +198,7 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 
 ```bash
 # 1) ESM → CJS（SEA 的 main 必须是 CommonJS：import 改 require、SELF_DIR 改 __dirname）
-node mkcjs.js                      # 生成 build/dsh-diag.cjs
+node tools/mkcjs.mjs               # 生成 build/dsh-diag.cjs；残留 import/export 或 node --check 不过就退出码 1（产物删掉）
 
 # 2) 生成 SEA blob
 node.exe --experimental-sea-config build/sea-config-22.json
@@ -183,8 +208,16 @@ cp node22/node.exe build/new.exe
 node postject-pkg/package/dist/api.js   # inject(): build/new.exe + NODE_SEA_BLOB + sentinel fuse
 
 # 4) 冒烟
-./build/new.exe help && ./build/new.exe runtime && ./build/new.exe logs --list
+./build/DSH-doctor.exe help && ./build/DSH-doctor.exe families | head && ./build/DSH-doctor.exe logs --list
 ```
+
+**判族回归**
+
+```bash
+node --test verdict.test.mjs      # 每族至少一条真实指纹；族名必须和 FAMILIES 对得上
+```
+
+改 `verdict()` 之前先往 `verdict.test.mjs` 加一条样本 —— 先有指纹，再有分支。打包链同理：`tools/mkcjs.mjs` 有两道闸 —— 先查残留（行首 `import`、任意位置的 `export`、`import.meta`、顶层 `await`、多条 `module.exports`），再让 `node --check` 自己验产物；任何一道不过就删产物、退出码 1，坏包出不了门（v0.5.0 就是这么烂掉的）。
 
 **调试方式**
 
@@ -194,7 +227,7 @@ node postject-pkg/package/dist/api.js   # inject(): build/new.exe + NODE_SEA_BLO
 
 **结构**
 
-`main()` 解析子命令 → `cmdDoctor` / `cmdAuto` / `cmdLogs` / `cmdSessions` / `cmdRuntime` / `cmdNet` / `cmdLock`；判类集中在 `verdict()` 与 `analyzeLog()`，两者是唯一事实源。
+`main()` 解析子命令 → `cmdDoctor` / `cmdAuto` / `cmdLogs` / `cmdFamilies` / `cmdSessions` / `cmdRuntime` / `cmdNet` / `cmdLock`；判族集中在 `verdict()` 与 `analyzeLog()`，族谱文字在 `FAMILIES`，两者是唯一事实源，且由测试强制对齐。
 
 ## 参考
 
@@ -233,7 +266,7 @@ Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 | Crash loop, `EPERM` | profile directory locked | repair ACLs via bundled PowerShell script |
 | Stack contains `reading 'kind'` | old `turn/end` events without `reason` | rewrite in place, keep `.dshfix.bak` |
 | `ENOENT … office-skills … SKILL.md` | runtime payload missing after update | restore only `resources\runtime` from the cached installer |
-| Unknown | — | classify the newest crash log and print next steps |
+| Unknown | — | classify the newest crash log into one of 24 families and print next steps |
 
 **Limits**
 
@@ -244,7 +277,7 @@ Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 
 **Release**
 
-Repository: source + PowerShell helper + this README. Release `v0.5.1` (beta) assets: `DSH-doctor.exe` (85,776,896 B, `SHA256 eae4cfe7e07b1636dac6e03fbc4d626794aff74d6a874256df59d2734a36a0e2`) and `repair-dsh-profile-lock.ps1`. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
+Repository: source + PowerShell helper + tests + build script + this README. Release `v0.6.0` (beta) assets: `DSH-doctor.exe` (85,791,232 B, `SHA256 35d73247cbdc2d17674e3d5a803f6a564178117bf94387b165d0d1d31c14bb76`) and `repair-dsh-profile-lock.ps1`. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
 
 **License**
 

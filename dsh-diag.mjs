@@ -38,7 +38,7 @@ const IS_SEA = !!process.argv[1] && process.argv[1] === process.execPath;
 const PROG = IS_SEA ? basename(process.execPath) : 'node dsh-diag.mjs';
 
 // 版本号：发版时只改这一处（help / version / 菜单标题都读它）
-const VERSION = '0.5.1';
+const VERSION = '0.6.0';
 // 通道：本工具依赖 DSH 内部实现（事件结构、资源布局），DSH 一升级就可能失准，
 // 所以 1.0 之前一律按测试版对外标，界面上要带出来。
 const CHANNEL = 'beta';
@@ -69,9 +69,95 @@ function runCmd(file, args, timeout = 20000) {
   };
 }
 
-// ────────────────────── A. 崩溃日志判读（14 族） ──────────────────────
+// ────────────────────── A. 崩溃日志判读（24 族） ──────────────────────
+// 族谱与指纹的唯一来源是共享库「DSH 报错弹窗」图库（60 张 / 24 族）。
+// FAMILIES 是给人看的对照表（families 子命令）；verdict() 是给日志用的判读器。
+// 两边名字必须一致 —— verdict 返回的族名要能在 FAMILIES 里找到（测试会查）。
 const CODES =
   /\b(ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EHOSTDOWN|EPROTO|EPIPE|CERT_[A-Z_]+|ERR_TLS_[A-Z_]+|SELF_SIGNED_CERT[A-Z_]*|UNABLE_TO_VERIFY[A-Z_]*|UND_ERR_[A-Z_]+|EPERM|EACCES|ENOENT|EBUSY|EEXIST)\b/gu;
+
+/**
+ * 24 族对照表（A–V，含 B′ / J′）。指纹取自共享库「DSH 报错弹窗」图库 60 张实拍。
+ * 弹窗只显示 error 文本最后 8 行（最多 1200 字符）；日志后缀说明哪个进程死了，
+ * 日志时间是 UTC；明细里的第一个词就是指纹 —— 这三个规则决定了判读方式。
+ * K / L / U / V 不产生 DSH 崩溃日志（K 是子进程全挂、L 是双击无反应、
+ * U 是服务端版本门、V 是 SmartScreen），所以 verdict() 只能在日志里偶然撞见文字时提示，
+ * 真正的判据在「它修什么」和 families 的说明里。
+ */
+const FAMILIES = [
+  { id: 'A', name: '启动期 JSON 解析崩溃', finger: 'Unexpected token … is not valid JSON（变体 null、"name"、","）',
+    cause: 'profile 里的 package.json / 会话文件被写成半截或带尾逗号，启动时 JSON.parse 直接抛',
+    fix: '用 node -e "JSON.parse(require(\'fs\').readFileSync(PATH,\'utf8\'))" 逐个验 profile 下的 json，补齐再启动' },
+  { id: 'B', name: '服务链未就绪', finger: 'workspaceController/sessionController is unavailable、Missing services、服务等待表',
+    cause: '某个插件 activate() 抛错或被跳过，下游服务永远等到不到，host 收摊',
+    fix: '日志往上找第一个报错的插件 → 先禁第三方插件，再逐条开回去' },
+  { id: "B′", name: '服务等待表停在 UI 服务', finger: 'pending (waiting for services: uiConversation, uiWorkspace) + -web-boot.log',
+    cause: 'B 的同族变体：卡在 UI 侧服务，web-boot 进程先死，host 跟着退',
+    fix: '同 B；另外先确认没有残留的 -web-boot 进程抢单实例锁' },
+  { id: 'C', name: '欢迎窗 RPC 失败', finger: 'desktop welcome: Web RPC failed',
+    cause: 'host 的本地 RPC 端口没起或已被别的进程占用，欢迎窗连不上',
+    fix: '结束所有 DSH 进程、确认端口空闲后重启（本工具 doctor 会报端口占用）' },
+  { id: 'D', name: '渲染进程崩溃', finger: 'Desktop renderer exited: crashed',
+    cause: 'GPU/驱动或渲染进程自身崩，主进程收到 exited: crashed',
+    fix: '关硬件加速 / 清 GPU 缓存；反复崩就删 %APPDATA%\\@deepseek-ai\\dsh-desktop\\GPUCache' },
+  { id: 'E', name: '鉴权失败（401）', finger: 'HTTP 401: Authentication Fails (governor)',
+    cause: 'API key 失效/过期，或代理改写了请求头',
+    fix: '重新登录或换 key；用本工具 net 子命令确认没有中间人代理' },
+  { id: 'F', name: '模型传输失败', finger: 'DeepSeek Messages transport failed、request failed (404)',
+    cause: '请求发出去了但没回来：代理、TLS、或端点路径不对（404）',
+    fix: '查网络/代理/TLS；404 先确认 profile 里的 baseURL 没被改错' },
+  { id: 'G', name: '提示词变量非法', finger: 'unknown prompt variable "{{cwd}}"',
+    cause: 'patch 里用了未注册的模板变量，渲染提示词时抛',
+    fix: '删掉 {{cwd}} 这类未注册变量，或改用已注册的（如 {{workingDirectory}}）' },
+  { id: 'H', name: '代理预设缺失', finger: '未知的代理预设值：standard、agent-preset/not-found',
+    cause: '会话引用的 preset 不在 presets 层里（升级后名字变了）',
+    fix: '恢复 presets 层，或把会话的 preset 改成 standard' },
+  { id: 'I', name: 'profile 目录权限被拒', finger: 'EPERM … .dsh\\profiles\\desktop\\lock',
+    cause: '配置目录被别的身份/安全软件占了 ACL，写 lock 被拒',
+    fix: '修目录 ACL（本工具 fix-lock --apply，同目录需要 repair-dsh-profile-lock.ps1）' },
+  { id: 'J', name: '网络层致命错误（fetch failed）', finger: '裸 fetch failed，没有 code 也没有 URL',
+    cause: '请求还没发出去就失败：DNS / 建连 / TLS / 代理，四层里必有一层断',
+    fix: '用本工具 net 子命令分层定位（DNS / TCP / TLS / HTTP），按报出来的那层修' },
+  { id: "J′", name: '安装包不完整（运行时资源没就位）', finger: 'ENOENT … resources\\runtime\\office-skills\\…\\SKILL.md',
+    cause: '安装/更新没铺完，运行时资源缺文件，插件 apply() 直接 throw',
+    fix: '等更新跑完再启动；本工具 runtime --restore 只回填 resources\\runtime' },
+  { id: 'K', name: '子进程全挂 0xC0000142', finger: '命令全部 0xC0000142 / 3221225794，无弹窗',
+    cause: '受限令牌里缺登录 SID（S-1-5-5-*），DLL 初始化就失败',
+    fix: '用正常登录的账户重开一次；别用「以其他用户身份运行」或受限令牌启动' },
+  { id: 'L', name: '双击无反应（单实例转给旧进程）', finger: '无日志、无弹窗，双击就是没动静',
+    cause: '单实例锁转给了没有窗口的旧实例（上次没退干净）',
+    fix: '任务管理器结束所有 DSH 进程再双击；反复出现就把 lock 文件删掉重启' },
+  { id: 'M', name: '欢迎窗鉴权失败（cookie 超 16KB → 431）', finger: 'desktop welcome: Web authentication failed',
+    cause: '每次启动都写 dsh-auth-* cookie，攒到 71 条 / 22.3KB，超过 16KB 请求头上限 → 431',
+    fix: '删 %APPDATA%\\@deepseek-ai\\dsh-desktop\\Network\\Cookies* 再启动（会重新登录一次）' },
+  { id: 'N', name: '会话日志被 turn/end reason=null 毒化', finger: "Cannot read properties of null (reading 'kind')",
+    cause: 'rc.3 起 subagentTiming 投影直接读 turn/end.reason.kind，reason=null 就炸在物化阶段',
+    fix: '本工具 sessions --fix 原地修（原件留 .dshfix.bak），再重启 DSH' },
+  { id: 'O', name: '更新窗口期 runtime 载荷未就位', finger: 'resources\\runtime 整段空，目录创建时间晚于崩溃',
+    cause: '更新器先替换 resources 再慢慢铺 runtime；窗口期起不来，且它只重试有限次',
+    fix: '本工具 runtime --wait 300 --launch 一条命令等铺完并拉起；一直空才 runtime --restore' },
+  { id: 'P', name: '会话工作目录不存在', finger: 'working-directory: directory does not exist: "D:\…"',
+    cause: '会话记着的工作目录被删/改名/换盘，启动即抛',
+    fix: '把会话切到存在的目录，或恢复那个路径；找不回就新建同路径空目录再启动' },
+  { id: 'Q', name: '工具 schema 非法（type: null）', finger: "Invalid schema for function '…': schema must be … 'type: \"object\"', got type: null + INVALID_REQUEST",
+    cause: '有插件注册了参数 schema 里 type 为 null 的函数，模型侧直接拒收整个请求',
+    fix: '禁用最近装的第三方插件逐个开回去定位注册者，让它的每个字段写明 type: "object"' },
+  { id: 'R', name: 'provider 路由没有凭证', finger: 'llm-pi-ai: no credential for provider route "…" + MISSING_CREDENTIAL',
+    cause: '预设里指定的 provider 路由没配 key（区别于 E：这里根本没发请求）',
+    fix: '给该 provider 填 key / 重新登录，或把预设的 provider 改回有凭证的那个' },
+  { id: 'S', name: '代理预设注册表损坏', finger: '预设卡「加载失败」，registry 读不出来',
+    cause: 'presets 注册表里有坏条目，整张表加载失败（当前只有 UI 截图，日志证据待补）',
+    fix: '把 presets 目录整段备份后重建；先移走最近改过的 preset 再启动' },
+  { id: 'T', name: '设置无法保存（数据目录不可写）', finger: '「未能保存设置」/「设置保存失败：Failed to fetch … 检查数据目录是否可写」',
+    cause: '保存要走 host 的 RPC，host 正在重启或数据目录只读',
+    fix: '先确认 host 在跑（doctor 第一段），再查数据目录写权限；只读盘/满盘都会这样' },
+  { id: 'U', name: '开放平台已更新，需刷新页面', finger: '「开放平台已更新，请刷新页面后继续使用」',
+    cause: '服务端版本门：本地版本低于开放平台要求的下限',
+    fix: '刷新页面；仍旧就升级 DSH（这是服务端要求，不是本地坏了）' },
+  { id: 'V', name: 'SmartScreen 拦下载（非 DSH 故障）', finger: 'Windows「无法验证发布者」蓝框',
+    cause: 'exe 没有代码签名 + 被标记为来自网络，SmartScreen 先拦一道',
+    fix: '属性 → 解除锁定 → 仍要运行；这不是 DSH 报错，比对 SHA256 后放行即可' },
+];
 
 function logsDir() {
   const appdata = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
@@ -115,12 +201,18 @@ function verdict(message, all) {
     return ['族 A：启动期 JSON 解析崩溃', '校正 profile 的 package.json（用 node -e "JSON.parse(...)" 验一遍再启动）'];
   // rc.3 的 subagentTiming 投影直接读 turn/end 的 reason.kind；reason 落成 null 就炸在物化阶段，
   // host 起不来 → 「应用无法启动」弹窗。修日志而不是修代码：
-  if (hit(/reading 'kind'\)/) && hit(/dsh-session-projection|dsh-subagent[\\/]lib[\\/]index\.js/))
+  // 只认这一句就够：用户常只贴一行「Cannot read properties of null (reading 'kind')」，
+  // 栈里有 dsh-session-projection 只是更确定，不该因为没贴栈就落到「未归类」。
+  if (hit(/reading 'kind'\)/))
     return ['族 N：会话日志被 turn/end reason=null 毒化',
       '本工具 sessions --fix 原地修（原件留 .dshfix.bak），再重启 DSH'];
   // 开机时 host 还没起监听就 fetch，必失败；等一秒重开就好，不是真故障。
   if (hit(/net::ERR_CONNECTION_REFUSED/) && hit(/^source: (main|web-boot)$/mu) && hit(/phase: running/))
     return ['启动竞态：host 未就绪（无害）', '关干净所有 DSH 进程再开一次；只有反复出现才去查端口占用'];
+  // 会话绑定的工作目录被删/改名/换盘：spawn 前就抛，弹窗里只留一行 working-directory。
+  if (hit(/working-directory: directory does not exist|directory does not exist:/i))
+    return ['族 P：会话工作目录不存在',
+      '把会话切到存在的目录，或恢复那个路径；找不回就新建同路径空目录再启动'];
   if (hit(/agent-preset\/not-found|未知的代理预设/))
     return ['族 H：代理预设缺失', '恢复 presets 层，或把会话的 preset 改成 standard'];
   // 两种退出码都要认得：
@@ -130,16 +222,40 @@ function verdict(message, all) {
   if (hit(/skipping profile bundle/i) && hit(/host exited with \d+:/))
     return ['族 B 变体 · profile 插件被跳过（版本不配）',
       '看被跳过的包名：把插件升到与内核匹配的版本，或 grant exact-version 豁免，或从 profile 的 bundles 里移除'];
+  // B 的同族变体：停在 UI 侧服务，且 web-boot 进程先死 —— 判读结论要能指向那个进程。
+  // ui* 不一定紧跟冒号：`waiting for services: workspaceController, uiConversation` 也是同一族。
+  if (hit(/waiting for services?:[^)\n]{0,100}?\bui[A-Z]\w*/))
+    return ["族 B′：服务等待表停在 UI 服务",
+      '同族 B：日志往上找第一个报错的插件；另外先确认没有残留的 -web-boot 进程抢单实例锁'];
   if (hit(/is unavailable|service-unavailable|did not activate|pending \(waiting for service/))
     return ['族 B：服务链未就绪', '日志里往上找第一个报错的插件 → 先禁第三方插件再逐条排'];
+  // 有插件注册了参数 schema 里 type 为 null 的函数，模型侧直接拒收（INVALID_REQUEST），
+  // 本地只能看到「调用失败」，真凶是那个注册者。
+  if (hit(/Invalid schema for function|got type: null/i))
+    return ['族 Q：工具 schema 非法（type: null）',
+      '禁用最近装的第三方插件逐个开回去定位注册者，让它的每个字段写明 type: "object"'];
   if (hit(/unknown prompt variable/))
     return ['族 G：提示词变量非法', '删掉 patch 里 {{cwd}} 这类未注册变量'];
+  if (hit(/agent-preset[\s\S]{0,60}?(registry|broken|failed to load)|preset registry[\s\S]{0,60}?(broken|failed)/i))
+    return ['族 S：代理预设注册表损坏',
+      '把 presets 目录整段备份后重建；先移走最近改过的 preset 再启动'];
+  // T —— 设置存不下去：保存要过 host 的 RPC，host 在重启或数据目录只读时都会这样。
+  if (hit(/(settings|设置)[\s\S]{0,40}?(save|保存)[\s\S]{0,30}?(fail|失败)|writeSettings[\s\S]{0,40}?(EACCES|EPERM|ENOSPC)|Failed to fetch[\s\S]{0,40}?设置/i))
+    return ['族 T：设置无法保存（数据目录不可写）',
+      '先确认 host 在跑（本工具 doctor 第一段），再查数据目录写权限；只读盘/满盘也会这样'];
+  // M —— 欢迎窗鉴权失败：不是密码错，是 cookie 攒太多撞了 16KB 头上限。
+  if (hit(/Web authentication failed/i))
+    return ['族 M：欢迎窗鉴权失败（cookie 超 16KB → 431）',
+      '删 %APPDATA%\\@deepseek-ai\\dsh-desktop\\Network\\Cookies* 再启动（会重新登录一次）'];
   if (hit(/Web RPC failed|Web request failed/))
     return ['族 C：欢迎窗 RPC 失败', '结束所有 DSH 进程、确认端口空闲后重启'];
   if (hit(/renderer exited: crashed/))
     return ['族 D：渲染进程崩溃', '关硬件加速 / 重置 GPU 缓存'];
-  if (hit(/HTTP 401|Authentication Fails/))
-    return ['族 E：鉴权失败', '重新登录或换 API key，并确认不是代理改写请求'];
+  if (hit(/no credential for provider route|MISSING_CREDENTIAL/i))
+    return ['族 R：provider 路由没有凭证',
+      '给该 provider 填 key / 重新登录，或把预设的 provider 改回有凭证的那个'];
+  if (hit(/HTTP 401|Authentication Fails/i))
+    return ['族 E：鉴权失败（401）', '重新登录或换 API key，并确认不是代理改写请求'];
   if (hit(/\bTRANSPORT\b|transport failed/))
     return ['族 F：模型传输失败', '查网络/代理/TLS'];
   // rc.5 的更新器先替换 resources 并重启应用，再慢慢铺 resources\runtime（node/pnpm/office-skills）。
@@ -152,8 +268,20 @@ function verdict(message, all) {
     return ['族 J′：安装包不完整（运行时资源没就位）', '多半是更新/安装未完成：重装或等更新跑完再启动'];
   if (hit(/\bEPERM\b.*\bopen\b|operation not permitted/))
     return ['族 I：profile 目录权限被拒', '修目录 ACL（本工具 fix-lock --apply）'];
-  if (hit(/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|getaddrinfo|EHOSTUNREACH|socket hang up|UND_ERR|CERT_|ETIMEDOUT/))
+  // 浏览器侧的 `Failed to fetch` 与 Node 侧的 `fetch failed` 是同一层：都该走 net 分层。
+  if (hit(/fetch failed|Failed to fetch|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|getaddrinfo|EHOSTUNREACH|socket hang up|UND_ERR|CERT_|ETIMEDOUT/))
     return ['族 J：网络层致命错误（fetch failed）', '用本工具 net 子命令分层定位：DNS / 连接 / TLS / 代理'];
+  // 以下三族正常不产生崩溃日志（U 是服务端版本门、V 是 SmartScreen、K 是子进程全挂）。
+  // 只在文字恰好落进日志时提示一句，别让人以为工具「认得」它们。
+  if (hit(/开放平台已更新|请刷新页面后继续使用|platform has been updated[\s\S]{0,40}?refresh/i))
+    return ['族 U：开放平台已更新，需刷新页面',
+      '刷新页面；仍旧就升级 DSH —— 这是服务端版本门，不是本地坏了'];
+  if (hit(/无法验证发布者|SmartScreen|unknown publisher|Mark of the Web/i))
+    return ['族 V：SmartScreen 拦下载（非 DSH 故障）',
+      '属性 → 解除锁定 → 仍要运行；比对 SHA256 后放行即可，这不是 DSH 的报错'];
+  if (hit(/0xC0000142|3221225794/i))
+    return ['族 K：子进程全挂 0xC0000142',
+      '用正常登录的账户重开一次；别用「以其他用户身份运行」或受限令牌启动'];
   if (hit(/EACCES|EBUSY/))
     return ['权限/占用类', '关掉占用进程，或用管理员修安装目录权限'];
   return ['未归类', '把「原始 error 段」前 40 行贴出来再判'];
@@ -231,6 +359,37 @@ function cmdLogs(argv) {
   if (wantAll && logs.length > 1) {
     say('\n全部日志一览（新 → 旧）：');
     logs.forEach((l) => say('  ' + logOneLine(l.file)));
+  }
+  return 0;
+}
+
+/** 打印 24 族对照表：没有日志可读时（或想先知道有哪几族）用它。 */
+/** `families <id>` 的选择：带撇/′ 的只挑 B′ / J′，不带的就是 B / J 本身。 */
+function selectFamilies(argv) {
+  const raw = argv.find((a) => !a.startsWith('--')) || '';
+  const norm = (x) => x.replace(/['’′]/gu, '').toUpperCase();
+  const want = norm(raw);
+  const prime = /['’′]/u.test(raw);
+  return want ? FAMILIES.filter((f) => norm(f.id) === want && (prime ? f.id !== norm(f.id) : f.id === want)) : FAMILIES;
+}
+
+function cmdFamilies(argv) {
+  const rows = selectFamilies(argv);
+  if (!rows.length) {
+    say(`${BAD} 没有这一族：${(argv.find((a) => !a.startsWith('--')) || '').trim()}`);
+    say(`可用：${FAMILIES.map((f) => f.id).join(' ')}`);
+    return 2;
+  }
+  // --json 只输所选族（机器消费用），过滤逻辑与人类视图共用同一份 rows
+  if (argv.includes('--json')) { say(JSON.stringify(rows, null, 2)); return 0; }
+  say(`DSH 弹窗族谱 ${FAMILIES.length} 族（A–V，含 B′ / J′）`);
+  say('来源：共享库「DSH 报错弹窗」图库 60 张实拍。判读日志用 logs，这里只是对照表。');
+  for (const f of rows) {
+    say('');
+    say(`${bold(`族 ${f.id}`)}：${f.name}`);
+    say(`  指纹  ${f.finger}`);
+    say(`  原因  ${f.cause}`);
+    say(`  处理  ${f.fix}`);
   }
   return 0;
 }
@@ -888,6 +1047,11 @@ DSH 升级后这些可能变，某些判读会失准（工具只报告、不乱�
         --all                  解析最新一份 + 附全部概览
         <路径>                 解析指定 log
 
+  ${cyan('families')}              24 族对照表（指纹 / 原因 / 处理），可只看一族
+        families P             只看族 P
+        families B'            只看 B′（引号可省）
+        --json                 机器可读
+
   ${cyan('net')}                   把 fetch failed 拆成 DNS/TCP/TLS/HTTP 四层
         [url ...]              默认测 api.deepseek.com / baidu / npm
         --json                 机器可读
@@ -1132,6 +1296,7 @@ async function main() {
       return code;
     }
     case 'logs': return cmdLogs(rest);
+    case 'families': case 'family': return cmdFamilies(rest);
     case 'net': {
       const asJson = rest.includes('--json');
       const urls = rest.filter((a) => !a.startsWith('--'));
@@ -1149,4 +1314,10 @@ async function main() {
   }
 }
 
-main().then((code) => process.exit(code ?? 0)).catch((e) => { say(`${BAD} ${e.stack || e.message}`); process.exit(2); });
+// 测试要引用 verdict / FAMILIES，所以只在「自己被执行」时才跑主流程：
+// SEA（argv[1] === execPath）或 node dsh-diag.mjs（文件名对得上）。
+const IS_ENTRY = IS_SEA || /dsh-diag\.(c|m)?js$/iu.test(process.argv[1] || '');
+export { verdict, FAMILIES, cmdFamilies, selectFamilies, analyzeLog };
+if (IS_ENTRY) {
+  main().then((code) => process.exit(code ?? 0)).catch((e) => { say(`${BAD} ${e.stack || e.message}`); process.exit(2); });
+}
