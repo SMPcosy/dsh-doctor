@@ -38,7 +38,7 @@ DSH（DeepSeek Harness）打不开、一启动就弹「无法使用」时，双�
 - **给谁**：装过 DSH、遇到过弹窗、但不想读日志的人。
 - **不是什么**：不是 DSH 插件，不改变 DSH 的功能；DSH 能正常打开之后的问题它不管。
 
-> **0.6.3 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。`0.6.0` 起它认得成体系的弹窗族谱，`0.6.2` 起共 **25 族**（A–V，含 A′ / B′ / J′），族谱来自共享库对 60 张实拍弹窗的整理 —— 不联网也能查：`DSH-doctor.exe families`。`0.6.1` 把「先判族」提到第一步（只读），并修掉大会话文件让体检报 `Invalid string length` 的问题。`0.6.3` 加了两件事：`host`（有进程、没窗口的启动体检，族 W）和 `guard`（给 desktop 的 `main.js` 装启动护栏，让「卡住」也留下证据）；安装目录改成自动发现，装在 D 盘或绿色版也能用。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
+> **0.6.4 测试版。** 它认的是 DSH **现在**的内部结构——会话事件的 `turn/end` 字段、`resources\runtime` 的目录布局、插件包放在哪。DSH 每升一次版本，这些都可能变，届时某些判读会失准（拿不准时它只报告、不动手）。`0.6.0` 起它认得成体系的弹窗族谱，`0.6.2` 起共 **25 族**（A–V，含 A′ / B′ / J′），族谱来自共享库对 60 张实拍弹窗的整理 —— 不联网也能查：`DSH-doctor.exe families`。`0.6.1` 把「先判族」提到第一步（只读），并修掉大会话文件让体检报 `Invalid string length` 的问题。`0.6.3` 加了两件事：`host`（有进程、没窗口的启动体检，族 W）和 `guard`（给 desktop 的 `main.js` 装启动护栏，让「卡住」也留下证据）；安装目录改成自动发现，装在 D 盘或绿色版也能用。`0.6.4` 只修护栏：0.6.3 的计时器在主机已经 ready 之后仍会写 `no-ready-<pid>.log`，把正常启动误报成族 W。遇到问题请开 Issue，附上 DSH 版本和 `DSH-doctor.exe doctor --json` 的输出。
 
 ## 目录
 
@@ -278,7 +278,7 @@ host 的 stderr 本来只存在父进程内存里一个 64KB 的环形缓冲，�
 
 - **跨版本不保证**。判定规则是按 `0.2.1-rc.3` 到 `0.2.1-rc.5` 的真实日志写的；DSH 换大版本后可能出现「认不出」的情况——这时它会老老实实说「未归类」，不会硬猜。
 - **判族依据不是完整日志语料**。24 族来自 60 张弹窗截图的文本归纳，本项目没有取得 DSH 全部 `crash-*.log` 样本；指纹未命中即报「未归类」，不硬套族名。
-- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.6.0` 做的是把族谱从 14 族补到 24 族（新增 M / P / Q / R / S / T / U / V / K 与 B′ 的判读）、加 `families` 对照表，并把打包链与判族回归搬进仓库（`tools/mkcjs.mjs`、`verdict.test.mjs`）；`0.6.1` 把崩溃判族提到动手之前，并修掉大会话文件导致的 `Invalid string length` 崩溃；`0.6.2` 新增族 A′（启动包 `package.json` 带 BOM），族谱 24 → 25，并把这次真实事故复盘收进「事故档案」；`0.6.3` 新增 `host`（族 W：有进程、没窗口）与 `guard`（启动护栏：host stderr 落盘、60s 无 ready 留证），安装目录改为自动发现，测试 11 条（原 7 条 + 护栏 4 条）。
+- **版本号语义**：`0.x` 一律是测试版，`1.0` 才承诺跨 DSH 版本可用。`0.6.0` 做的是把族谱从 14 族补到 24 族（新增 M / P / Q / R / S / T / U / V / K 与 B′ 的判读）、加 `families` 对照表，并把打包链与判族回归搬进仓库（`tools/mkcjs.mjs`、`verdict.test.mjs`）；`0.6.1` 把崩溃判族提到动手之前，并修掉大会话文件导致的 `Invalid string length` 崩溃；`0.6.2` 新增族 A′（启动包 `package.json` 带 BOM），族谱 24 → 25，并把这次真实事故复盘收进「事故档案」；`0.6.3` 新增 `host`（族 W：有进程、没窗口）与 `guard`（启动护栏：host stderr 落盘、60s 无 ready 留证），安装目录改为自动发现，测试 11 条（原 7 条 + 护栏 4 条）；`0.6.4` 修掉护栏的 ready 误报（已 ready 的主机不再在 60s 后写 `no-ready`），并给护栏标记加版本号——`guard --apply` 会把 0.6.3 的旧护栏自动剥掉重装，测试 12 条。
 - **只管启动阶段**。DSH 打开之后某个功能不好用、某个插件报错，不在范围内。
 - **仅 Windows x64**，Win10 1809 及以上。没有 macOS / Linux 版。
 - **未签名**，SmartScreen 必然提示。要消掉得自己买证书签。
@@ -299,9 +299,9 @@ host 的 stderr 本来只存在父进程内存里一个 64KB 的环形缓冲，�
 | 位置 | 内容 |
 | --- | --- |
 | 仓库 | 源码 `dsh-diag.mjs`、`repair-dsh-profile-lock.ps1`、`verdict.test.mjs`、`guard.test.mjs`、`tools/`（`mkcjs.mjs`、`inject.cjs`、`sea-config.json`）、`README.md`、`.gitignore` |
-| Release `v0.6.3` 资产（当前最新发版） | `DSH-doctor.exe`（85,810,688 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
+| Release `v0.6.4` 资产（线上最新） | `DSH-doctor.exe`（85,812,224 B）、`repair-dsh-profile-lock.ps1`（7,741 B） |
 
-`SHA256(DSH-doctor.exe) = f1ec3c38d435c8a2dafb3e62aa0f1b0aec26a96c4aac3416bf3c50d64292e84d`
+`SHA256(DSH-doctor.exe) = e7f717250187d88d2334f863bf71293c6346ce28966090d64350d465a723697d`
 
 自查：`certutil -hashfile DSH-doctor.exe SHA256`
 
@@ -311,7 +311,7 @@ host 的 stderr 本来只存在父进程内存里一个 64KB 的环形缓冲，�
 
 1. exe 不进 git（`.gitignore` 挡 `*.exe`、`build/`、`*.bak`），走 Release 资产——单个 exe 80 MB 以上，提交进仓库会让每个 clone 都拖一遍。
 2. 先建私有仓库确认内容，再改可见性：`gh repo edit <name> --visibility public --accept-visibility-change-consequences`。
-3. 打标签并发版：`gh release create v0.6.3 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.6.3 (beta)" --notes-file notes.md`。
+3. 打标签并发版：`gh release create v0.6.4 DSH-doctor.exe repair-dsh-profile-lock.ps1 --title "DSH Doctor 0.6.4 (beta)" --notes-file notes.md`。
 4. 发新版：改 `VERSION` → 重新打包（见下节）→ 新 tag → 上传新资产，旧 tag 保留；只有旧版**行为已经不对**（比如这次打包链有 bug）时才下线旧版，并在说明里写清原因。
 
 ## 开发过程
@@ -418,7 +418,7 @@ Single 85 MB exe. No installer, no Node.js, no admin rights, no network calls.
 
 **Release**
 
-Repository: source + PowerShell helper + tests + build script + this README. Release `v0.6.3` (beta) assets: `DSH-doctor.exe` (85,810,688 B, `SHA256 f1ec3c38d435c8a2dafb3e62aa0f1b0aec26a96c4aac3416bf3c50d64292e84d`) and `repair-dsh-profile-lock.ps1`. `0.6.3` adds `host` (the "processes but no window" boot check, family W) and `guard` (a boot guard that makes a stuck host leave evidence), plus install-root auto-discovery so a D-drive or green install works too. `0.6.1` classifies the newest crash before touching anything and fixes the `Invalid string length` crash on very large session files. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
+Repository: source + PowerShell helper + tests + build script + this README. Release `v0.6.4` (beta) supersedes `v0.6.3`: same `host` / `guard` features, with the guard no longer writing a false `no-ready-<pid>.log` for a host that already reported ready. Assets: `DSH-doctor.exe` and `repair-dsh-profile-lock.ps1`. `0.6.1` classifies the newest crash before touching anything and fixes the `Invalid string length` crash on very large session files. `v0.5.0` was withdrawn because its build pipeline could silently produce a broken exe. Every `0.x` is a beta — the tool reads DSH internals, so a DSH upgrade may invalidate some verdicts. Built with Node 22 SEA + postject; Node 24 segfaults on injection.
 
 **License**
 

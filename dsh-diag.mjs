@@ -38,7 +38,7 @@ const IS_SEA = !!process.argv[1] && process.argv[1] === process.execPath;
 const PROG = IS_SEA ? basename(process.execPath) : 'node dsh-diag.mjs';
 
 // 版本号：发版时只改这一处（help / version / 菜单标题都读它）
-const VERSION = '0.6.3';
+const VERSION = '0.6.4';
 // 通道：本工具依赖 DSH 内部实现（事件结构、资源布局），DSH 一升级就可能失准，
 // 所以 1.0 之前一律按测试版对外标，界面上要带出来。
 const CHANNEL = 'beta';
@@ -1113,9 +1113,18 @@ function resolveInstallRoot(argv = []) {
 // 壳于是不开窗、不写日志、进程活着 —— 用户看到的就是「有进程没界面」。
 // host 的 stderr 只在内存 64KB 环里，且只有非零退出才落盘，事后无从判断卡在哪。
 // 护栏：stderr 实时写 logs\host-<pid>.log；60s 没 ready 再写 logs\no-ready-<pid>.log（含 stderr 尾部）。
-const GUARD_BEGIN = '/* [dsh-guard] host capture begin */';
-const GUARD_END = '/* [dsh-guard] host capture end */';
+// 标记带版本号：0.6.4 前打的护栏没有 ready-clear（每次启动都留一份假 no-ready），
+// 只看「标记在不在」会把旧版当健康、--apply 直接返回 changed:false，修复永远到不了老用户。
+const GUARD_VERSION = 2;
+const GUARD_BEGIN = `/* [dsh-guard v${GUARD_VERSION}] host capture begin */`;
+const GUARD_END = `/* [dsh-guard v${GUARD_VERSION}] host capture end */`;
 const GUARD_ANCHOR = 'child.stdout?.pipe(process.stdout);';
+
+/** 源码里护栏的版本号；0 = 没装，1 = 0.6.3 及更早的无版本标记版。 */
+function guardVersionOf(src) {
+  const m = String(src || '').match(/\/\* \[dsh-guard(?: v(\d+))?\] host capture begin \*\//u);
+  return m ? Number(m[1] || 1) : 0;
+}
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'); }
 
@@ -1134,10 +1143,11 @@ function guardBody(indent) {
     '  const gstart = Date.now();',
     '  gwrite("# dsh-guard " + new Date().toISOString() + " pid=" + gpid + "\\n");',
     '  child.stderr?.on("data", (chunk) => gwrite(String(chunk)));',
+    '  let gwatch = null;',
     '  const gresolve = this.readyResolve;',
-    '  this.readyResolve = (v) => { try { gwrite("\\n# ready " + (Date.now() - gstart) + "ms url=" + String(v && v.url) + "\\n"); } catch (e) {} return gresolve(v); };',
-    '  const gwatch = setInterval(() => {',
-    '    if (this.child !== child) { clearInterval(gwatch); return; }',
+    '  this.readyResolve = (v) => { try { if (gwatch) { clearInterval(gwatch); gwatch = null; } } catch (e) {} try { gwrite("\\n# ready " + (Date.now() - gstart) + "ms url=" + String(v && v.url) + "\\n"); } catch (e) {} return gresolve(v); };',
+    '  gwatch = setInterval(() => {',
+    '    if (this.child !== child || child.exitCode !== null) { clearInterval(gwatch); return; }',
     '    if (Date.now() - gstart < 60000) return;',
     '    clearInterval(gwatch);',
     '    try {',
@@ -1159,19 +1169,31 @@ function guardBody(indent) {
 }
 
 function applyGuardPatch(src) {
-  if (src.includes(GUARD_BEGIN)) return { ok: true, changed: false, src };
-  const at = src.indexOf(GUARD_ANCHOR);
+  const have = guardVersionOf(src);
+  if (have === GUARD_VERSION) return { ok: true, changed: false, src };
+  let base = src;
+  let upgraded = false;
+  if (have) {
+    const rev = revertGuardPatch(src);
+    if (!rev.ok) return { ok: false, changed: false, reason: rev.reason };
+    base = rev.src;
+    upgraded = true;
+  }
+  const at = base.indexOf(GUARD_ANCHOR);
   if (at < 0) return { ok: false, changed: false, reason: 'anchor-missing' };
-  const lineStart = src.lastIndexOf('\n', at) + 1;
-  const indent = (src.slice(lineStart, at).match(/^[ \t]*/u) || ['\t\t'])[0];
-  const lineEnd = src.indexOf('\n', at);
-  const insertAt = lineEnd < 0 ? src.length : lineEnd + 1;
-  return { ok: true, changed: true, src: src.slice(0, insertAt) + guardBody(indent) + '\n' + src.slice(insertAt) };
+  const lineStart = base.lastIndexOf('\n', at) + 1;
+  const indent = (base.slice(lineStart, at).match(/^[ \t]*/u) || ['\t\t'])[0];
+  const lineEnd = base.indexOf('\n', at);
+  const insertAt = lineEnd < 0 ? base.length : lineEnd + 1;
+  return { ok: true, changed: true, upgraded, from: have, src: base.slice(0, insertAt) + guardBody(indent) + '\n' + base.slice(insertAt) };
 }
 
 function revertGuardPatch(src) {
-  if (!src.includes(GUARD_BEGIN)) return { ok: true, changed: false, src };
-  const re = new RegExp('^[ \\t]*' + escapeRe(GUARD_BEGIN) + '[\\s\\S]*?' + escapeRe(GUARD_END) + '[ \\t]*\\r?\\n', 'mu');
+  const have = guardVersionOf(src);
+  if (!have) return { ok: true, changed: false, src };
+  const begin = have === 1 ? '/* [dsh-guard] host capture begin */' : `/* [dsh-guard v${have}] host capture begin */`;
+  const end = have === 1 ? '/* [dsh-guard] host capture end */' : `/* [dsh-guard v${have}] host capture end */`;
+  const re = new RegExp('^[ \\t]*' + escapeRe(begin) + '[\\s\\S]*?' + escapeRe(end) + '[ \\t]*\\r?\\n', 'mu');
   if (!re.test(src)) return { ok: false, changed: false, reason: 'marker-pair-broken' };
   return { ok: true, changed: true, src: src.replace(re, '') };
 }
@@ -1200,16 +1222,17 @@ function cmdGuard(argv) {
     return 2;
   }
   const src = readFileSync(file, 'utf8');
-  const installed = src.includes(GUARD_BEGIN);
+  const haveVersion = guardVersionOf(src);
+  const installed = haveVersion === GUARD_VERSION;
   const wantApply = argv.includes('--apply') || argv.includes('--install');
   const wantRevert = argv.includes('--revert') || argv.includes('--unpatch');
   if (!wantApply && !wantRevert) {
-    if (asJson) say(JSON.stringify({ root, via, file, installed, guardFiles: guardFiles().map((g) => g.name) }));
+    if (asJson) say(JSON.stringify({ root, via, file, installed, guardVersion: haveVersion, currentVersion: GUARD_VERSION, guardFiles: guardFiles().map((g) => g.name) }));
     else {
       say(`${bold('DSH 启动护栏')}`);
       say(`  安装目录：${root}（来自 ${via}）`);
       say(`  main.js ：${file}`);
-      say(`  护栏状态：${installed ? `${OK} 已在位` : `${WARN} 没装`}`);
+      say(`  护栏状态：${installed ? `${OK} 已在位（v${GUARD_VERSION}）` : haveVersion ? `${WARN} 旧版 v${haveVersion}（缺 ready-clear，每次启动会留假 no-ready）：${PROG} guard --apply 升级` : `${WARN} 没装`}`);
       const gf = guardFiles();
       if (gf.length) {
         say(`  留证文件：${gf.length} 份（最新 ${basename(gf[0].path)}，${(gf[0].size / 1024).toFixed(1)} KB）`);
@@ -1219,8 +1242,8 @@ function cmdGuard(argv) {
     }
     return installed ? 0 : 1;
   }
-  if (wantApply && installed) { say(`${OK} 护栏已经在位，无需重复打`); return 0; }
-  if (wantRevert && !installed) { say(`${OK} 没有护栏，无需撤销`); return 0; }
+  if (wantApply && installed) { say(`${OK} 护栏已经在位（v${GUARD_VERSION}），无需重复打`); return 0; }
+  if (wantRevert && !haveVersion) { say(`${OK} 没有护栏，无需撤销`); return 0; }
   const res = wantApply ? applyGuardPatch(src) : revertGuardPatch(src);
   if (!res.ok) {
     say(`${BAD} 改动失败：${res.reason}`);
@@ -1246,7 +1269,7 @@ function cmdGuard(argv) {
       }
     } catch { /* 自检失败不阻断，已写备份 */ } finally { try { unlinkSync(tmp); } catch { /* ignore */ } }
   }
-  say(`${OK} ${wantApply ? '护栏已装上' : '护栏已撤销'}：${file}`);
+  say(`${OK} ${wantApply ? (res.upgraded ? `护栏已升级到 v${GUARD_VERSION}` : '护栏已装上') : '护栏已撤销'}：${file}`);
   say(`  备份：${basename(bak)}`);
   if (wantApply) {
     say('  效果：host 的 stderr 实时落到 logs\\host-<pid>.log；60s 没 ready 再写 logs\\no-ready-<pid>.log');
@@ -1281,7 +1304,8 @@ async function cmdHost(argv) {
 
   const rows = dshProcessRows();
   const withWindow = rows.filter((r) => r.hwnd > 0);
-  const guardOn = (() => { try { return readFileSync(join(root, 'resources', 'app', 'lib', 'main.js'), 'utf8').includes(GUARD_BEGIN); } catch { return false; } })();
+  const guardVersion = (() => { try { return guardVersionOf(readFileSync(join(root, 'resources', 'app', 'lib', 'main.js'), 'utf8')); } catch { return 0; } })();
+  const guardOn = guardVersion === GUARD_VERSION;
   const evidence = guardFiles();
   const noReady = evidence.filter((g) => g.name.startsWith('no-ready-'));
 
@@ -1292,13 +1316,13 @@ async function cmdHost(argv) {
       : '有进程、没有任何窗口 —— 壳在等 host 的 ready，host 卡住了（族 W）';
 
   if (asJson) {
-    say(JSON.stringify({ root, via, guardOn, verdict: verdictText, processes: rows, evidence: evidence.map((e) => ({ name: e.name, size: e.size, mtime: new Date(e.mtime).toISOString() })) }, null, 2));
+    say(JSON.stringify({ root, via, guardOn, guardVersion, verdict: verdictText, processes: rows, evidence: evidence.map((e) => ({ name: e.name, size: e.size, mtime: new Date(e.mtime).toISOString() })) }, null, 2));
     return rows.length && !withWindow.length ? 1 : 0;
   }
 
   say(`${bold('DSH 启动体检')}（族 W：壳等不到 host ready）`);
   say(`  安装目录：${root}${via === '默认位置' ? '' : `（来自 ${via}）`}`);
-  say(`  护栏：${guardOn ? `${OK} 已在位` : `${WARN} 没装（装：${PROG} guard --apply）`}`);
+  say(`  护栏：${guardOn ? `${OK} 已在位（v${GUARD_VERSION}）` : guardVersion ? `${WARN} 旧版 v${guardVersion}，缺 ready-clear（升级：${PROG} guard --apply）` : `${WARN} 没装（装：${PROG} guard --apply）`}`);
   if (!rows.length) say(`  进程：${BAD} 一个都没有`);
   else {
     say(`  进程：${rows.length} 个`);
@@ -1658,7 +1682,7 @@ async function main() {
 // 测试要引用 verdict / FAMILIES，所以只在「自己被执行」时才跑主流程：
 // SEA（argv[1] === execPath）或 node dsh-diag.mjs（文件名对得上）。
 const IS_ENTRY = IS_SEA || /dsh-diag\.(c|m)?js$/iu.test(process.argv[1] || '');
-export { verdict, FAMILIES, cmdFamilies, selectFamilies, analyzeLog, applyGuardPatch, revertGuardPatch, resolveInstallRoot, looksLikeInstall };
+export { verdict, FAMILIES, cmdFamilies, selectFamilies, analyzeLog, applyGuardPatch, revertGuardPatch, guardVersionOf, resolveInstallRoot, looksLikeInstall };
 if (IS_ENTRY) {
   main().then((code) => process.exit(code ?? 0)).catch((e) => { say(`${BAD} ${e.stack || e.message}`); process.exit(2); });
 }
